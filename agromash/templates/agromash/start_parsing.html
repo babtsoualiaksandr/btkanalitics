@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Start Parsing</title>
+</head>
+<body>
+    <h1>Start Page Parsing Task</h1>
+    <form method="post">
+        {% csrf_token %}
+        <label for="url">URL:</label>
+        <input type="url" id="url" name="url" required><br><br>
+        <label for="selector">Window Selector:</label>
+        <input type="text" id="selector" name="selector" required><br><br>
+        <button type="submit">Start Parsing</button>
+    </form>
+</body>
+</html>
