@@ -1,7 +1,7 @@
 import os
 from django.core.management.base import BaseCommand
 from django.conf import settings
-from agromash.models import AccountVideoAnalytics, Alarm
+from agromash.models import AccountVideoAnalytics, Alarm, Monitor
 import requests
 import json
 import time
@@ -94,6 +94,20 @@ class Command(BaseCommand):
                                 monitor_name = monitor.get('name')
                                 self.stdout.write(f'ALARM_MONITOR: ID {monitor_id}, Name {monitor_name}')
                                 if monitor_id:
+                                    # Create or update Monitor record
+                                    monitor_obj, created = Monitor.objects.get_or_create(
+                                        monitor_id=str(monitor_id),
+                                        defaults={
+                                            'monitor_name': monitor_name,
+                                            'topic': monitor.get('topic', '')
+                                        }
+                                    )
+                                    if not created:
+                                        # Update existing monitor
+                                        monitor_obj.monitor_name = monitor_name
+                                        monitor_obj.topic = monitor.get('topic', '')
+                                        monitor_obj.save()
+                                    
                                     try:
                                         alarm_url = f"{base_url}/api/v2/alarm-monitors/{monitor_id}/alarms/search"
                                         headers = {

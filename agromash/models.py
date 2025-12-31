@@ -1,4 +1,5 @@
 from django.db import models
+from django.contrib.auth.models import User
 
 
 class AccountVideoAnalytics(models.Model):
@@ -40,4 +41,15 @@ class TelegramSubscriber(models.Model):
 
     def __str__(self):
         return f"Subscriber {self.chat_id} - {self.username or 'Unknown'}"
+
+
+class Monitor(models.Model):
+    monitor_id = models.CharField(max_length=255, unique=True)
+    monitor_name = models.CharField(max_length=255)
+    topic = models.CharField(max_length=255)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.monitor_name} (ID: {self.monitor_id})"
 
