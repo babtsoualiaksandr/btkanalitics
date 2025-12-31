@@ -10,6 +10,48 @@ import time
 class Command(BaseCommand):
     help = 'Parse events for a specific account'
 
+    def authenticate(self, account, base_url, max_attempts=4, retry_delay_sec=1):
+        """Получить валидный access_token (до max_attempts попыток).
+
+        Возвращает строку access_token или None.
+        """
+        auth_url = f"{base_url}/oauth2/v1/auth/authenticate"
+        payload = {
+            "name": account.name,
+            "password": account.password,
+            "rememberme": True,
+        }
+
+        for attempt in range(1, max_attempts + 1):
+            try:
+                self.stdout.write(f'Authenticating... attempt {attempt}/{max_attempts}')
+                response = requests.post(auth_url, json=payload)
+                if response.status_code != 200:
+                    self.stdout.write(self.style.ERROR(
+                        f'Authentication failed: {response.status_code} {response.text}'
+                    ))
+                    time.sleep(retry_delay_sec)
+                    continue
+
+                data = response.json()
+                access_token = data.get('access_token')
+                refresh_token = data.get('refresh_token')
+                if not access_token:
+                    self.stdout.write(self.style.ERROR('No access_token in response'))
+                    time.sleep(retry_delay_sec)
+                    continue
+
+                account.access_token = access_token
+                account.refresh_token = refresh_token
+                account.save()
+                self.stdout.write('Authentication successful, got access_token')
+                return access_token
+            except Exception as e:
+                self.stdout.write(self.style.ERROR(f'Authentication error: {e}'))
+                time.sleep(retry_delay_sec)
+
+        return None
+
     def add_arguments(self, parser):
         parser.add_argument('name', type=str, help='Account name')
         parser.add_argument('password', type=str, help='Account password')
@@ -30,27 +72,9 @@ class Command(BaseCommand):
         while True:
             try:
                 # Authenticate
-                self.stdout.write('Authenticating...')
-                auth_url = f"{base_url}/oauth2/v1/auth/authenticate"
-                payload = {
-                    "name": account.name,
-                    "password": account.password,
-                    "rememberme": True
-                }
-                response = requests.post(auth_url, json=payload)
-                if response.status_code != 200:
-                    self.stdout.write(self.style.ERROR(f'Authentication failed: {response.status_code} {response.text}'))
-                    continue
-                data = response.json()
-                access_token = data.get('access_token')
-                refresh_token = data.get('refresh_token')
+                access_token = self.authenticate(account, base_url)
                 if not access_token:
-                    self.stdout.write(self.style.ERROR('No access_token in response'))
                     continue
-                account.access_token = access_token
-                account.refresh_token = refresh_token
-                account.save()
-                self.stdout.write('Authentication successful, got access_token')
 
                 # Listen to SSE with reconnects
                 while True:
@@ -68,8 +92,27 @@ class Command(BaseCommand):
         }
         try:
             response = requests.get(sse_url, headers=headers, stream=True)
+
+            # Если токен протух — пробуем до 4 раз перевыпустить access_token и переподключиться
+            if response.status_code == 401:
+                self.stdout.write(self.style.ERROR('Unauthorized (401) on SSE connect. Trying to refresh token...'))
+                for _ in range(4):
+                    new_token = self.authenticate(account, base_url, max_attempts=1)
+                    if not new_token:
+                        continue
+                    headers['Authorization'] = f'Bearer {new_token}'
+                    response = requests.get(sse_url, headers=headers, stream=True)
+                    if response.status_code != 401:
+                        access_token = new_token
+                        break
+                else:
+                    # 4 попытки не помогли
+                    self.stdout.write(self.style.ERROR('Failed to obtain valid access_token after 4 attempts (still 401).'))
+                    return False
+
             response.raise_for_status()
             event_type = None
+            data = None
             for line in response.iter_lines(decode_unicode=True):
                 if line == '':
                     # Process the event
@@ -149,6 +192,7 @@ class Command(BaseCommand):
                         else:
                             self.stdout.write(f'Unknown event type: {event_type}, data: {data}')
                     event_type = None
+                    data = None
                 if line.startswith('event:'):
                     event_type = line[6:]
                 if line.startswith('data:'):
