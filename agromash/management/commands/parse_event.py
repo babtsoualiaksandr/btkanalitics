@@ -1,3 +1,4 @@
+import os
 from django.core.management.base import BaseCommand
 from django.conf import settings
 from agromash.models import AccountVideoAnalytics, Alarm
@@ -49,12 +50,12 @@ class Command(BaseCommand):
 
                 # Listen to SSE with reconnects
                 while True:
-                    self.listen_sse(base_url, access_token)
+                    self.listen_sse(base_url, access_token, account)
 
             except Exception as e:
                 self.stdout.write(self.style.ERROR(f'Error in run_parsing: {e}'))
 
-    def listen_sse(self, base_url, access_token):
+    def listen_sse(self, base_url, access_token, account):
         sse_url = f"{base_url}/sse-holder/api/v1/sse?platform=WEB&ngsw-bypass"
         headers = {
             'Authorization': f'Bearer {access_token}',
@@ -108,6 +109,7 @@ class Command(BaseCommand):
                                             for alarm in alarms:
                                                 _, created = Alarm.objects.get_or_create(
                                                     alarm_id=alarm['id'],
+                                                    account=account,
                                                     defaults={
                                                         'monitor_id': alarm['monitor_id'],
                                                         'monitor_name': alarm['monitor_name'],

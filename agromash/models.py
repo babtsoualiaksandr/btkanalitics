@@ -26,6 +26,8 @@ class Alarm(models.Model):
     face_identities = models.JSONField(null=True, blank=True)
     snapshots = models.JSONField(null=True, blank=True)
     data = models.JSONField()
+    account = models.ForeignKey(AccountVideoAnalytics, on_delete=models.CASCADE)
 
     def __str__(self):
         return f"Alarm {self.alarm_id} - {self.topic}"
+
