@@ -1,11 +1,31 @@
 from django.db import models
 
-class ParsingTask(models.Model):
-    url = models.URLField(help_text="URL of the page to parse")
-    window_selector = models.CharField(max_length=255, help_text="CSS selector for the window to wait for")
-    is_active = models.BooleanField(default=False, help_text="Whether the task is currently running")
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
+
+class AccountVideoAnalytics(models.Model):
+    name = models.CharField(max_length=255, help_text="Account name")
+    password = models.CharField(max_length=255, help_text="Account password")
+    contract = models.CharField(max_length=255, help_text="Contract number")
+    organization = models.CharField(max_length=255, help_text="Organization name")
+    access_token = models.TextField(null=True, blank=True)
+    refresh_token = models.TextField(null=True, blank=True)
 
     def __str__(self):
-        return f"ParsingTask for {self.url} - {'Active' if self.is_active else 'Inactive'}"
+        return f"{self.name} - {self.organization}"
+
+
+class Alarm(models.Model):
+    monitor_id = models.IntegerField()
+    monitor_name = models.CharField(max_length=255)
+    alarm_id = models.CharField(max_length=255, unique=True)
+    topic = models.CharField(max_length=255)
+    start_time = models.BigIntegerField()
+    end_time = models.BigIntegerField()
+    event_id = models.BigIntegerField()
+    original_quality_snapshot = models.TextField(null=True, blank=True)
+    plate_identities = models.JSONField(null=True, blank=True)
+    face_identities = models.JSONField(null=True, blank=True)
+    snapshots = models.JSONField(null=True, blank=True)
+    data = models.JSONField()
+
+    def __str__(self):
+        return f"Alarm {self.alarm_id} - {self.topic}"
