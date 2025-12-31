@@ -43,9 +43,13 @@ class Command(BaseCommand):
                     continue
                 data = response.json()
                 access_token = data.get('access_token')
+                refresh_token = data.get('refresh_token')
                 if not access_token:
                     self.stdout.write(self.style.ERROR('No access_token in response'))
                     continue
+                account.access_token = access_token
+                account.refresh_token = refresh_token
+                account.save()
                 self.stdout.write('Authentication successful, got access_token')
 
                 # Listen to SSE with reconnects
@@ -130,7 +134,7 @@ class Command(BaseCommand):
                                         else:
                                             self.stdout.write(f'Failed to get alarms for {monitor_id}: {response.status_code} {response.text}')
                                     except Exception as e:
-                                        self.stdout.write(f'Error getting alarms for {monitor_id}: {e}')
+                                        self.stdout.write(f'Error getting alarms for {alarm}  {monitor_id}: {e}')
                             except json.JSONDecodeError:
                                 self.stdout.write(f'Invalid JSON in ALARM_MONITOR: {data}')
                         else:
@@ -145,3 +149,5 @@ class Command(BaseCommand):
                     self.stdout.write(f' data: {data}')
         except Exception as e:
             self.stdout.write(self.style.ERROR(f'Error in SSE: {e}'))
+            return False
+        return False

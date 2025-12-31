@@ -1,6 +1,6 @@
 from django.contrib import admin
 from django.core.management import call_command
-from .models import  AccountVideoAnalytics, Alarm
+from .models import AccountVideoAnalytics, Alarm, TelegramSubscriber
 
 
 def parse_event_action(modeladmin, request, queryset):
@@ -21,4 +21,10 @@ class AlarmAdmin(admin.ModelAdmin):
     list_display = ('alarm_id', 'topic', 'monitor_name', 'start_time', 'end_time')
     search_fields = ('alarm_id', 'topic', 'monitor_name')
     readonly_fields = ('data',)
+
+
+@admin.register(TelegramSubscriber)
+class TelegramSubscriberAdmin(admin.ModelAdmin):
+    list_display = ('chat_id', 'username', 'subscribed_at')
+    search_fields = ('chat_id', 'username')
 

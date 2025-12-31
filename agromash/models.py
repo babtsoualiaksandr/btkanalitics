@@ -31,3 +31,13 @@ class Alarm(models.Model):
     def __str__(self):
         return f"Alarm {self.alarm_id} - {self.topic}"
 
+
+class TelegramSubscriber(models.Model):
+    chat_id = models.BigIntegerField(unique=True)
+    subscribed_monitors = models.JSONField(default=list)
+    username = models.CharField(max_length=255, blank=True, null=True)
+    subscribed_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"Subscriber {self.chat_id} - {self.username or 'Unknown'}"
+
