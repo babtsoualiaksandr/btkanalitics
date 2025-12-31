@@ -71,18 +71,13 @@ class Command(BaseCommand):
             response.raise_for_status()
             event_type = None
             for line in response.iter_lines(decode_unicode=True):
-                self.stdout.write(f'line {line} !')
-                part_line = line[0:6]
-                self.stdout.write(f'line @{part_line}@')
                 if line == '':
                     # Process the event
                     if event_type and data:
-                        #data = '\n'.join(data_lines)
                         if event_type == "KEEP_ALIVE":
                             try:
                                 parsed_data = json.loads(data)
                                 ttl = parsed_data.get('ttl_seconds', 0)
-                                self.stdout.write(f'TTL == {ttl} ')
                                 if ttl < 30:
                                     self.stdout.write(f'TTL {ttl} < 30, restarting stream')
                                     return
@@ -130,7 +125,7 @@ class Command(BaseCommand):
                                                 )
                                                 if created:
                                                     saved_count += 1
-                                            self.stdout.write(f'Saved {saved_count} new alarms for monitor {monitor_id}')
+                                            #self.stdout.write(f'Saved {saved_count} new alarms for monitor {monitor_id}')
                                         else:
                                             self.stdout.write(f'Failed to get alarms for {monitor_id}: {response.status_code} {response.text}')
                                     except Exception as e:
@@ -140,13 +135,10 @@ class Command(BaseCommand):
                         else:
                             self.stdout.write(f'Unknown event type: {event_type}, data: {data}')
                     event_type = None
-                    data_lines = []
                 if line.startswith('event:'):
                     event_type = line[6:]
-                    self.stdout.write(f'event_type: {event_type}')
                 if line.startswith('data:'):
                     data = line[5:]
-                    self.stdout.write(f' data: {data}')
         except Exception as e:
             self.stdout.write(self.style.ERROR(f'Error in SSE: {e}'))
             return False
