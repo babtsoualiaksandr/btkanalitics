@@ -2,6 +2,7 @@ from django.apps import AppConfig
 import threading
 import requests
 import time
+import sys
 from django.conf import settings
 
 
@@ -11,6 +12,13 @@ class AgromashConfig(AppConfig):
     def ready(self):
         import agromash.signals
         from agromash.models import TelegramSubscriber
+
+        # Не запускаем Telegram polling в Celery worker/beat и других management commands.
+        # Иначе каждый воркер поднимет собственный бесконечный поток.
+        if any(arg in sys.argv for arg in ("celery", "worker", "beat")):
+            return
+        if "runserver" not in sys.argv:
+            return
 
         def run_bot():
             token = settings.TLG_BOT_TOKEN

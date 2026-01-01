@@ -1,10 +1,8 @@
 from django.core.management.base import BaseCommand
 from django.conf import settings
-from agromash.models import AccountVideoAnalytics, Alarm, Monitor
-import json
-import time
 
-from agromash.va_api_client import VAApiClient
+from agromash.models import AccountVideoAnalytics
+from agromash.services.parse_event_runner import ParserRunContext, run_parse_event
 
 
 class Command(BaseCommand):
@@ -17,132 +15,15 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         name = options['name']
         password = options['password']
-        base_url = settings.BASE_URL
-        self.stdout.write(f'Using BASE_URL: {base_url}')
         try:
             account = AccountVideoAnalytics.objects.get(name=name, password=password)
             self.stdout.write(f'Processing account: {account.name} for {account.organization}')
-            self.run_parsing(account, base_url)
+
+            run_parse_event(
+                account_id=account.id,
+                task_id=None,
+                ctx=ParserRunContext(account_id=account.id, base_url=settings.BASE_URL),
+                stdout_write=self.stdout.write,
+            )
         except AccountVideoAnalytics.DoesNotExist:
             self.stdout.write(self.style.ERROR(f'Account with name {name} and password {password} not found'))
-
-    def run_parsing(self, account, base_url):
-        client = VAApiClient(account_id=account.id, base_url=base_url)
-        while True:
-            try:
-                # Ensure we have tokens in storage; actual validity is handled per-request.
-                try:
-                    client.ensure_authenticated()
-                except Exception as e:
-                    self.stdout.write(self.style.ERROR(f'Login failed: {e}'))
-                    time.sleep(1)
-                    continue
-
-                # Listen to SSE with reconnects
-                while True:
-                    self.listen_sse(client, account)
-
-            except Exception as e:
-                self.stdout.write(self.style.ERROR(f'Error in run_parsing: {e}'))
-
-    def listen_sse(self, client: VAApiClient, account):
-        sse_path = "/sse-holder/api/v1/sse?platform=WEB&ngsw-bypass"
-        headers = {
-            'Accept': 'text/event-stream',
-            'Cache-Control': 'no-cache',
-        }
-        try:
-            response = client.request('GET', sse_path, headers=headers, stream=True)
-
-            response.raise_for_status()
-            event_type = None
-            data = None
-            for line in response.iter_lines(decode_unicode=True):
-                if line == '':
-                    # Process the event
-                    if event_type and data:
-                        if event_type == "KEEP_ALIVE":
-                            try:
-                                parsed_data = json.loads(data)
-                                ttl = parsed_data.get('ttl_seconds', 0)
-                                if ttl < 30:
-                                    self.stdout.write(f'TTL {ttl} < 30, restarting stream')
-                                    return
-                                else:
-                                    self.stdout.write(f'KEEP_ALIVE: TTL {ttl}')
-                            except json.JSONDecodeError:
-                                self.stdout.write(f'Invalid JSON in KEEP_ALIVE: {data}')
-                        elif event_type == "ALARM_MONITOR":
-                            try:
-                                parsed_data = json.loads(data)
-                                # parse further
-                                monitor = parsed_data.get('monitor', {})
-                                monitor_id = monitor.get('id')
-                                monitor_name = monitor.get('name')
-                                self.stdout.write(f'ALARM_MONITOR: ID {monitor_id}, Name {monitor_name}')
-                                if monitor_id:
-                                    # Create or update Monitor record
-                                    monitor_obj, created = Monitor.objects.get_or_create(
-                                        monitor_id=str(monitor_id),
-                                        defaults={
-                                            'monitor_name': monitor_name,
-                                            'topic': monitor.get('topic', '')
-                                        }
-                                    )
-                                    if not created:
-                                        # Update existing monitor
-                                        monitor_obj.monitor_name = monitor_name
-                                        monitor_obj.topic = monitor.get('topic', '')
-                                        monitor_obj.save()
-                                    
-                                    try:
-                                        alarm_path = f"/api/v2/alarm-monitors/{monitor_id}/alarms/search"
-                                        headers = {'Content-Type': 'application/json'}
-                                        payload = {"size": 2}
-                                        resp = client.request('POST', alarm_path, headers=headers, json=payload)
-                                        if resp.status_code == 200:
-                                            alarms = resp.json()
-                                            saved_count = 0
-                                            for alarm in alarms:
-                                                _, created = Alarm.objects.get_or_create(
-                                                    alarm_id=alarm['id'],
-                                                    account=account,
-                                                    defaults={
-                                                        'monitor_id': alarm['monitor_id'],
-                                                        'monitor_name': alarm['monitor_name'],
-                                                        'topic': alarm['topic'],
-                                                        'start_time': alarm['start_time'],
-                                                        'end_time': alarm['end_time'],
-                                                        'event_id': alarm['event_id'],
-                                                        'original_quality_snapshot': alarm.get('original_quality_snapshot'),
-                                                        'plate_identities': alarm.get('plate_identities'),
-                                                        'face_identities': alarm.get('face_identities'),
-                                                        'snapshots': alarm.get('snapshots'),
-                                                        'data': alarm
-                                                    }
-                                                )
-                                                if created:
-                                                    saved_count += 1
-                                            #self.stdout.write(f'Saved {saved_count} new alarms for monitor {monitor_id}')
-                                        else:
-                                            self.stdout.write(
-                                                f'Failed to get alarms for {monitor_id}: {resp.status_code}'
-                                            )
-                                    except Exception as e:
-                                        self.stdout.write(
-                                            f'Error getting alarms for monitor {monitor_id}: {e}'
-                                        )
-                            except json.JSONDecodeError:
-                                self.stdout.write(f'Invalid JSON in ALARM_MONITOR: {data}')
-                        else:
-                            self.stdout.write(f'Unknown event type: {event_type}, data: {data}')
-                    event_type = None
-                    data = None
-                if line.startswith('event:'):
-                    event_type = line[6:]
-                if line.startswith('data:'):
-                    data = line[5:]
-        except Exception as e:
-            self.stdout.write(self.style.ERROR(f'Error in SSE: {e}'))
-            return False
-        return False

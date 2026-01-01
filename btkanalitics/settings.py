@@ -126,3 +126,16 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/6.0/howto/static-files/
 
 STATIC_URL = 'static/'
+
+# -----------------
+# Celery
+# -----------------
+# Ожидается, что в окружении задан брокер (например Redis).
+# Значения по умолчанию оставлены максимально простыми для локальной разработки.
+CELERY_BROKER_URL = config('CELERY_BROKER_URL', default='redis://localhost:6379/0')
+CELERY_RESULT_BACKEND = config('CELERY_RESULT_BACKEND', default=CELERY_BROKER_URL)
+CELERY_TASK_TRACK_STARTED = True
+CELERY_TASK_TIME_LIMIT = config('CELERY_TASK_TIME_LIMIT', default=60 * 60 * 24, cast=int)
+CELERY_TASK_SOFT_TIME_LIMIT = config('CELERY_TASK_SOFT_TIME_LIMIT', default=60 * 60 * 23, cast=int)
+CELERY_WORKER_PREFETCH_MULTIPLIER = config('CELERY_WORKER_PREFETCH_MULTIPLIER', default=1, cast=int)
+CELERY_TASK_ACKS_LATE = True
