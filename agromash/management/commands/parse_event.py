@@ -1,56 +1,14 @@
-import os
 from django.core.management.base import BaseCommand
 from django.conf import settings
 from agromash.models import AccountVideoAnalytics, Alarm, Monitor
-import requests
 import json
 import time
+
+from agromash.va_api_client import VAApiClient
 
 
 class Command(BaseCommand):
     help = 'Parse events for a specific account'
-
-    def authenticate(self, account, base_url, max_attempts=4, retry_delay_sec=1):
-        """Получить валидный access_token (до max_attempts попыток).
-
-        Возвращает строку access_token или None.
-        """
-        auth_url = f"{base_url}/oauth2/v1/auth/authenticate"
-        payload = {
-            "name": account.name,
-            "password": account.password,
-            "rememberme": True,
-        }
-
-        for attempt in range(1, max_attempts + 1):
-            try:
-                self.stdout.write(f'Authenticating... attempt {attempt}/{max_attempts}')
-                response = requests.post(auth_url, json=payload)
-                if response.status_code != 200:
-                    self.stdout.write(self.style.ERROR(
-                        f'Authentication failed: {response.status_code} {response.text}'
-                    ))
-                    time.sleep(retry_delay_sec)
-                    continue
-
-                data = response.json()
-                access_token = data.get('access_token')
-                refresh_token = data.get('refresh_token')
-                if not access_token:
-                    self.stdout.write(self.style.ERROR('No access_token in response'))
-                    time.sleep(retry_delay_sec)
-                    continue
-
-                account.access_token = access_token
-                account.refresh_token = refresh_token
-                account.save()
-                self.stdout.write('Authentication successful, got access_token')
-                return access_token
-            except Exception as e:
-                self.stdout.write(self.style.ERROR(f'Authentication error: {e}'))
-                time.sleep(retry_delay_sec)
-
-        return None
 
     def add_arguments(self, parser):
         parser.add_argument('name', type=str, help='Account name')
@@ -69,46 +27,32 @@ class Command(BaseCommand):
             self.stdout.write(self.style.ERROR(f'Account with name {name} and password {password} not found'))
 
     def run_parsing(self, account, base_url):
+        client = VAApiClient(account_id=account.id, base_url=base_url)
         while True:
             try:
-                # Authenticate
-                access_token = self.authenticate(account, base_url)
-                if not access_token:
+                # Ensure we have tokens in storage; actual validity is handled per-request.
+                try:
+                    client.ensure_authenticated()
+                except Exception as e:
+                    self.stdout.write(self.style.ERROR(f'Login failed: {e}'))
+                    time.sleep(1)
                     continue
 
                 # Listen to SSE with reconnects
                 while True:
-                    self.listen_sse(base_url, access_token, account)
+                    self.listen_sse(client, account)
 
             except Exception as e:
                 self.stdout.write(self.style.ERROR(f'Error in run_parsing: {e}'))
 
-    def listen_sse(self, base_url, access_token, account):
-        sse_url = f"{base_url}/sse-holder/api/v1/sse?platform=WEB&ngsw-bypass"
+    def listen_sse(self, client: VAApiClient, account):
+        sse_path = "/sse-holder/api/v1/sse?platform=WEB&ngsw-bypass"
         headers = {
-            'Authorization': f'Bearer {access_token}',
             'Accept': 'text/event-stream',
             'Cache-Control': 'no-cache',
         }
         try:
-            response = requests.get(sse_url, headers=headers, stream=True)
-
-            # Если токен протух — пробуем до 4 раз перевыпустить access_token и переподключиться
-            if response.status_code == 401:
-                self.stdout.write(self.style.ERROR('Unauthorized (401) on SSE connect. Trying to refresh token...'))
-                for _ in range(4):
-                    new_token = self.authenticate(account, base_url, max_attempts=1)
-                    if not new_token:
-                        continue
-                    headers['Authorization'] = f'Bearer {new_token}'
-                    response = requests.get(sse_url, headers=headers, stream=True)
-                    if response.status_code != 401:
-                        access_token = new_token
-                        break
-                else:
-                    # 4 попытки не помогли
-                    self.stdout.write(self.style.ERROR('Failed to obtain valid access_token after 4 attempts (still 401).'))
-                    return False
+            response = client.request('GET', sse_path, headers=headers, stream=True)
 
             response.raise_for_status()
             event_type = None
@@ -152,15 +96,12 @@ class Command(BaseCommand):
                                         monitor_obj.save()
                                     
                                     try:
-                                        alarm_url = f"{base_url}/api/v2/alarm-monitors/{monitor_id}/alarms/search"
-                                        headers = {
-                                            'Authorization': f'Bearer {access_token}',
-                                            'Content-Type': 'application/json'
-                                        }
+                                        alarm_path = f"/api/v2/alarm-monitors/{monitor_id}/alarms/search"
+                                        headers = {'Content-Type': 'application/json'}
                                         payload = {"size": 2}
-                                        response = requests.post(alarm_url, headers=headers, json=payload)
-                                        if response.status_code == 200:
-                                            alarms = response.json()
+                                        resp = client.request('POST', alarm_path, headers=headers, json=payload)
+                                        if resp.status_code == 200:
+                                            alarms = resp.json()
                                             saved_count = 0
                                             for alarm in alarms:
                                                 _, created = Alarm.objects.get_or_create(
@@ -184,9 +125,13 @@ class Command(BaseCommand):
                                                     saved_count += 1
                                             #self.stdout.write(f'Saved {saved_count} new alarms for monitor {monitor_id}')
                                         else:
-                                            self.stdout.write(f'Failed to get alarms for {monitor_id}: {response.status_code} {response.text}')
+                                            self.stdout.write(
+                                                f'Failed to get alarms for {monitor_id}: {resp.status_code}'
+                                            )
                                     except Exception as e:
-                                        self.stdout.write(f'Error getting alarms for {alarm}  {monitor_id}: {e}')
+                                        self.stdout.write(
+                                            f'Error getting alarms for monitor {monitor_id}: {e}'
+                                        )
                             except json.JSONDecodeError:
                                 self.stdout.write(f'Invalid JSON in ALARM_MONITOR: {data}')
                         else:
