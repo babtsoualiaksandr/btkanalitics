@@ -11,7 +11,7 @@ class AgromashConfig(AppConfig):
 
     def ready(self):
         import agromash.signals
-        from agromash.models import TelegramSubscriber
+        from agromash.models import TelegramSubscriber, Monitor
 
         # Не запускаем Telegram polling в Celery worker/beat и других management commands.
         # Иначе каждый воркер поднимет собственный бесконечный поток.
@@ -37,7 +37,7 @@ class AgromashConfig(AppConfig):
                                         username = update['message']['from'].get('username')
                                         TelegramSubscriber.objects.get_or_create(
                                             chat_id=chat_id,
-                                            defaults={'username': username, 'subscribed_monitors': []}
+                                            defaults={'username': username, 'subscribed_monitor_ids': []}
                                         )
                                         requests.post(f'https://api.telegram.org/bot{token}/sendMessage',
                                                       json={'chat_id': chat_id, 'text': 'Welcome! You are subscribed.'})
@@ -46,11 +46,18 @@ class AgromashConfig(AppConfig):
                                             monitor_id = int(text.split()[1])
                                             subscriber, created = TelegramSubscriber.objects.get_or_create(
                                                 chat_id=chat_id,
-                                                defaults={'username': update['message']['from'].get('username'), 'subscribed_monitors': []}
+                                                defaults={'username': update['message']['from'].get('username'), 'subscribed_monitor_ids': []}
                                             )
-                                            if monitor_id not in subscriber.subscribed_monitors:
-                                                subscriber.subscribed_monitors.append(monitor_id)
-                                                subscriber.save()
+                                            monitor_obj, _ = Monitor.objects.get_or_create(
+                                                monitor_id=str(monitor_id),
+                                                defaults={
+                                                    'monitor_name': str(monitor_id),
+                                                    'topic': '',
+                                                },
+                                            )
+
+                                            if not subscriber.subscribed_monitors.filter(pk=monitor_obj.pk).exists():
+                                                subscriber.subscribed_monitors.add(monitor_obj)
                                                 requests.post(f'https://api.telegram.org/bot{token}/sendMessage',
                                                               json={'chat_id': chat_id, 'text': f'Monitor {monitor_id} added to your subscriptions.'})
                                             else:

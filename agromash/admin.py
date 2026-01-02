@@ -1,12 +1,23 @@
 from django.contrib import admin, messages
+from django import forms
 from django.utils.html import format_html
+from django.utils import timezone
+import datetime
+from django.db.models import Count
 from django.conf import settings
 from django.http import Http404
 from django.http import HttpResponseNotAllowed
 from django.middleware.csrf import get_token
 from django.shortcuts import redirect
 from django.urls import path, reverse
-from .models import AccountVideoAnalytics, Alarm, TelegramSubscriber, Monitor
+from .models import (
+    AccountVideoAnalytics,
+    Alarm,
+    Monitor,
+    TelegramReportSubscription,
+    TelegramSubscriber,
+    TelegramSubscriberMonitorSubscription,
+)
 
 from .tasks import parse_event_task, request_stop_parser
 
@@ -171,9 +182,64 @@ class AccountVideoAnalyticsAdmin(admin.ModelAdmin):
 
 @admin.register(Alarm)
 class AlarmAdmin(admin.ModelAdmin):
-    list_display = ('alarm_id', 'topic', 'monitor_name', 'start_time', 'end_time', 'snapshot_preview')
-    search_fields = ('alarm_id', 'topic', 'monitor_name')
-    readonly_fields = ('data', 'snapshot_preview')
+    list_display = ('alarm_id', 'topic', 'monitor_name', 'start_time_human', 'end_time_human', 'snapshot_preview')
+    search_fields = (
+        'alarm_id',
+        'topic',
+        'monitor_name',
+        'monitor_id',
+        'event_id',
+        'account__name',
+        'account__organization',
+    )
+    list_filter = (
+        'account',
+        'topic',
+    )
+    ordering = ('-start_time',)
+    list_per_page = 20
+    list_max_show_all = 1000
+    show_full_result_count = False
+    readonly_fields = (
+        'data',
+        'snapshot_preview',
+        'start_time',
+        'end_time',
+        'start_time_human',
+        'end_time_human',
+    )
+
+    @staticmethod
+    def _to_aware_dt(value: int):
+        """BigInteger timestamp -> aware datetime.
+
+        В данных VA встречаются epoch в секундах или миллисекундах.
+        Эвристика: > 1e12 считаем миллисекундами.
+        """
+        if value is None:
+            return None
+        ts = int(value)
+        if ts > 1_000_000_000_000:
+            ts = ts / 1000.0
+        return datetime.datetime.fromtimestamp(ts, tz=datetime.timezone.utc)
+
+    def start_time_human(self, obj):
+        dt = self._to_aware_dt(obj.start_time)
+        if not dt:
+            return "-"
+        return timezone.localtime(dt).strftime('%Y-%m-%d %H:%M:%S')
+
+    start_time_human.short_description = 'Start time'
+    start_time_human.admin_order_field = 'start_time'
+
+    def end_time_human(self, obj):
+        dt = self._to_aware_dt(obj.end_time)
+        if not dt:
+            return "-"
+        return timezone.localtime(dt).strftime('%Y-%m-%d %H:%M:%S')
+
+    end_time_human.short_description = 'End time'
+    end_time_human.admin_order_field = 'end_time'
     
     def snapshot_preview(self, obj):
         """Отображение превью изображения в списке и форме редактирования"""
@@ -194,14 +260,137 @@ class AlarmAdmin(admin.ModelAdmin):
     snapshot_preview.short_description = "Snapshot"
 
 
+class TelegramSubscriberMonitorSubscriptionInline(admin.TabularInline):
+    model = TelegramSubscriberMonitorSubscription
+    extra = 0
+    autocomplete_fields = ('monitor',)
+
+
+class TelegramSubscriberAdminForm(forms.ModelForm):
+    """Форма для массового выбора мониторов одним действием.
+
+    `TelegramSubscriber.subscribed_monitors` объявлен с `through=...`, поэтому
+    стандартный виджет ManyToMany в админке не показывается. Даем отдельное
+    поле с чекбоксами и синхронизируем связь через `.set()`.
+    """
+
+    subscribed_monitors = forms.ModelMultipleChoiceField(
+        label="Подписанные мониторы",
+        queryset=Monitor.objects.all().order_by("monitor_id"),
+        required=False,
+        widget=forms.CheckboxSelectMultiple(
+            attrs={
+                # Нужен, чтобы повесить CSS и сделать подписи в одну строку.
+                "class": "agromash-subscribed-monitors",
+            }
+        ),
+        help_text="Отметьте мониторы, которые этот подписчик должен отслеживать.",
+    )
+
+    class Meta:
+        model = TelegramSubscriber
+        # Legacy JSON поле оставляем, но в админке не редактируем.
+        fields = ("chat_id", "username", "subscribed_monitors")
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if self.instance and self.instance.pk:
+            self.fields["subscribed_monitors"].initial = self.instance.subscribed_monitors.all()
+
+    def save(self, commit=True):
+        instance: TelegramSubscriber = super().save(commit=commit)
+
+        # Для M2M через through объект должен быть сохранен.
+        if instance.pk:
+            instance.subscribed_monitors.set(self.cleaned_data.get("subscribed_monitors"))
+        return instance
+
+
 @admin.register(TelegramSubscriber)
 class TelegramSubscriberAdmin(admin.ModelAdmin):
-    list_display = ('chat_id', 'username', 'subscribed_at')
-    search_fields = ('chat_id', 'username')
+    form = TelegramSubscriberAdminForm
+    list_display = ('chat_id', 'username', 'subscribed_at', 'subscribed_monitors_count', 'subscribed_monitors_preview')
+    search_fields = (
+        'chat_id',
+        'username',
+        'subscribed_monitors__monitor_id',
+        'subscribed_monitors__monitor_name',
+    )
+    list_filter = ('subscribed_at',)
+    # Вместо inline-редактирования по одному используем массовый выбор в форме.
+    inlines = ()
+    readonly_fields = ("subscribed_at",)
+
+    class Media:
+        css = {
+            "all": (
+                "agromash/admin.css",
+            )
+        }
+
+    def subscribed_monitors_count(self, obj: TelegramSubscriber):
+        return obj.subscribed_monitors.count()
+
+    subscribed_monitors_count.short_description = 'Мониторов'
+
+    def subscribed_monitors_preview(self, obj: TelegramSubscriber):
+        qs = obj.subscribed_monitors.all().order_by('monitor_id')
+        items = [f"{m.monitor_name} ({m.monitor_id})" for m in qs[:10]]
+        suffix = "" if qs.count() <= 10 else " …"
+        return ", ".join(items) + suffix
+
+    subscribed_monitors_preview.short_description = 'Подписанные мониторы'
 
 
 @admin.register(Monitor)
 class MonitorAdmin(admin.ModelAdmin):
-    list_display = ('monitor_id', 'monitor_name', 'topic', 'created_at', 'updated_at')
-    search_fields = ('monitor_id', 'monitor_name', 'topic')
+    list_display = ('monitor_id', 'monitor_name', 'topic', 'subscribers_count', 'created_at', 'updated_at')
+    search_fields = (
+        'monitor_id',
+        'monitor_name',
+        'topic',
+        'subscribers__chat_id',
+        'subscribers__username',
+    )
+    list_filter = ('topic',)
     readonly_fields = ('created_at', 'updated_at')
+
+    def get_queryset(self, request):
+        qs = super().get_queryset(request)
+        return qs.annotate(_subscribers_count=Count('subscribers', distinct=True))
+
+    def subscribers_count(self, obj: Monitor):
+        return getattr(obj, '_subscribers_count', 0)
+
+    subscribers_count.short_description = 'Подписчиков'
+    subscribers_count.admin_order_field = '_subscribers_count'
+
+
+@admin.register(TelegramReportSubscription)
+class TelegramReportSubscriptionAdmin(admin.ModelAdmin):
+    list_display = (
+        "id",
+        "subscriber",
+        "frequency",
+        "period_from_minutes",
+        "period_to_minutes",
+        "send_pdf",
+        "send_xlsx",
+        "enabled",
+        "last_sent_at",
+        "next_run_at",
+    )
+    list_filter = (
+        "enabled",
+        "frequency",
+        "send_pdf",
+        "send_xlsx",
+    )
+    search_fields = (
+        "subscriber__chat_id",
+        "subscriber__username",
+        "monitors__monitor_id",
+        "monitors__monitor_name",
+    )
+    filter_horizontal = ("monitors",)
+    autocomplete_fields = ("subscriber",)

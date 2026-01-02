@@ -1,3 +1,166 @@
 from django.test import TestCase
+from django.utils import timezone
 
-# Create your tests here.
+from agromash.models import AccountVideoAnalytics, Alarm, Monitor, TelegramReportSubscription, TelegramSubscriber
+from agromash.services.alarm_data_parser import parse_alarm_data
+from agromash.services.report_scheduler import compute_next_run_at
+from agromash.services.reporting import get_alarms_for_subscription
+
+
+class TelegramSubscriberMonitorM2MTest(TestCase):
+    def test_subscribe_unsubscribe_monitor(self):
+        monitor = Monitor.objects.create(monitor_id='123', monitor_name='Test Monitor', topic='')
+        sub = TelegramSubscriber.objects.create(chat_id=1, username='u')
+
+        sub.subscribed_monitors.add(monitor)
+        self.assertEqual(sub.subscribed_monitors.count(), 1)
+        self.assertEqual(monitor.subscribers.count(), 1)
+
+        sub.subscribed_monitors.remove(monitor)
+        self.assertEqual(sub.subscribed_monitors.count(), 0)
+        self.assertEqual(monitor.subscribers.count(), 0)
+
+
+class AlarmDataParserTest(TestCase):
+    def test_parse_line_crossed(self):
+        payload = {
+            "id": "1287:1767348071339:22653779894376786",
+            "topic": "LineCrossed",
+            "level": 3,
+            "monitor_id": 258,
+            "monitor_name": "Бобруйск, Пришли купить в Shop",
+            "channel_id": 1287,
+            "channel_name": "РУП Белтелеком ...",
+            "start_time": 1767348071339,
+            "end_time": 1767348071339,
+            "event_id": 22653779894376786,
+            "tags": [{"id": 53, "name": "технологический"}],
+            "params": {
+                "object": {
+                    "id": 3986,
+                    "classes": [
+                        {"class": "human", "similarity": 0.9},
+                        {"class": "vehicle", "similarity": 0.1},
+                    ],
+                    "bounding_box": {"top": 1, "left": 2, "right": 3, "bottom": 4},
+                },
+                "snapshots": [
+                    {"metadata": {"tripwire": [{"x": 0.1, "y": 0.2}]}}
+                ],
+            },
+            "snapshots": [
+                {
+                    "tag": "initial",
+                    "path": "/api/v2/...",
+                    "type": "FULLSCREEN",
+                    "original_quality_snapshot": "/api/v2/.../original",
+                }
+            ],
+        }
+        parsed = parse_alarm_data(payload)
+        self.assertEqual(parsed.topic, "LineCrossed")
+        self.assertEqual(parsed.monitor_id, 258)
+        self.assertEqual(parsed.details.get("best_class"), "human")
+        self.assertTrue(parsed.original_quality_snapshot)
+
+    def test_parse_plate_not_matched(self):
+        payload = {
+            "id": "1857:1767348088024:32681325944115337",
+            "topic": "PlateNotMatched",
+            "level": 1,
+            "monitor_id": 340,
+            "params": {
+                "plate": {"state": "BY", "valid": True, "number": "1399ip6", "recognition_time": 1767348088185},
+                "object": {"id": 714, "object_type": {"value": "vehicle"}, "bounding_box": {"top": 0}},
+                "identities": [],
+            },
+        }
+        parsed = parse_alarm_data(payload)
+        self.assertEqual(parsed.topic, "PlateNotMatched")
+        self.assertEqual(parsed.details.get("plate_number"), "1399ip6")
+        self.assertEqual(parsed.details.get("object_type"), "vehicle")
+
+    def test_parse_face_not_matched(self):
+        payload = {
+            "id": "741:1767339105702:13048444018989602",
+            "topic": "FaceNotMatched",
+            "level": 1,
+            "monitor_id": 149,
+            "params": {
+                "object": {"id": 8994, "bounding_box": {"top": 0.1}},
+                "rotation": {"yaw": -2.0, "roll": 1.6, "pitch": -5.4},
+                "attributes": {"age": 43, "gender": "female"},
+                "scrfd_enabled": True,
+                "face_attribute_enabled": True,
+            },
+        }
+        parsed = parse_alarm_data(payload)
+        self.assertEqual(parsed.topic, "FaceNotMatched")
+        self.assertEqual(parsed.details.get("attributes", {}).get("age"), 43)
+
+
+class ReportSubscriptionTest(TestCase):
+    def test_compute_next_run_at_hourly(self):
+        now = timezone.now()
+        nxt = compute_next_run_at(now=now, frequency="hourly")
+        self.assertTrue(nxt > now)
+
+    def test_get_alarms_for_subscription_filters_by_time_and_monitor(self):
+        now = timezone.now()
+        now_ms = int(now.timestamp() * 1000)
+
+        acc = AccountVideoAnalytics.objects.create(
+            name="n",
+            password="p",
+            contract="c",
+            organization="o",
+        )
+        sub = TelegramSubscriber.objects.create(chat_id=123, username="u")
+        mon = Monitor.objects.create(monitor_id="258", monitor_name="M", topic="")
+
+        report = TelegramReportSubscription.objects.create(
+            subscriber=sub,
+            period_from_minutes=60,
+            period_to_minutes=0,
+            frequency=TelegramReportSubscription.FREQ_HOURLY,
+        )
+        report.monitors.add(mon)
+
+        Alarm.objects.create(
+            monitor_id=258,
+            monitor_name="M",
+            alarm_id="a1",
+            topic="LineCrossed",
+            start_time=now_ms - 30 * 60_000,
+            end_time=now_ms - 30 * 60_000,
+            event_id=1,
+            data={"topic": "LineCrossed"},
+            account=acc,
+        )
+        # другой монитор — не должен попасть
+        Alarm.objects.create(
+            monitor_id=999,
+            monitor_name="X",
+            alarm_id="a2",
+            topic="LineCrossed",
+            start_time=now_ms - 30 * 60_000,
+            end_time=now_ms - 30 * 60_000,
+            event_id=2,
+            data={"topic": "LineCrossed"},
+            account=acc,
+        )
+        # слишком старый — не должен попасть
+        Alarm.objects.create(
+            monitor_id=258,
+            monitor_name="M",
+            alarm_id="a3",
+            topic="LineCrossed",
+            start_time=now_ms - 5 * 60 * 60_000,
+            end_time=now_ms - 5 * 60 * 60_000,
+            event_id=3,
+            data={"topic": "LineCrossed"},
+            account=acc,
+        )
+
+        qs = get_alarms_for_subscription(sub=report, now=now)
+        self.assertEqual(qs.count(), 1)

@@ -285,7 +285,7 @@ def _process_sse_event(
     try:
         alarm_path = f"/api/v2/alarm-monitors/{monitor_id}/alarms/search"
         headers = {"Content-Type": "application/json"}
-        payload = {"size": 2}
+        payload = {"size": 1}
         resp = client.request("POST", alarm_path, headers=headers, json=payload)
         if resp.status_code != 200:
             write(f"Failed to get alarms for {monitor_id}: {resp.status_code}")

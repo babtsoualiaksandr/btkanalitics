@@ -25,7 +25,7 @@ class Command(BaseCommand):
                             username = update['message']['from'].get('username')
                             TelegramSubscriber.objects.get_or_create(
                                 chat_id=chat_id,
-                                defaults={'username': username, 'subscribed_monitors': []}
+                                defaults={'username': username, 'subscribed_monitor_ids': []}
                             )
                             # Send welcome
                             requests.post(f'https://api.telegram.org/bot{token}/sendMessage',

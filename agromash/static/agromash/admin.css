@@ -1,0 +1,46 @@
+/*
+  Админка: TelegramSubscriber -> subscribed_monitors
+  Делаем подписи к чекбоксам одной строкой (без переноса).
+*/
+
+.agromash-subscribed-monitors {
+  /* контейнер списка */
+  padding-left: 0;
+  margin-left: 0;
+  max-width: 100%;
+}
+
+.agromash-subscribed-monitors li {
+  list-style: none;
+  width: 100%;
+}
+
+/*
+  Принудительно делаем ОДНУ строку на пункт + аккуратное многоточие.
+  У Django admin у form-row часто ограниченная ширина, поэтому делаем label
+  на всю ширину поля.
+*/
+.form-row.field-subscribed_monitors .agromash-subscribed-monitors label,
+.agromash-subscribed-monitors label {
+  white-space: nowrap !important;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.agromash-subscribed-monitors input[type="checkbox"] {
+  flex: 0 0 auto;
+}
+
+/*
+  На некоторых темах админки поле может быть слишком узким из-за flex/grid.
+  Расширяем только конкретную строку.
+*/
+.form-row.field-subscribed_monitors .fieldBox,
+.form-row.field-subscribed_monitors .flex-container {
+  max-width: 100%;
+}

@@ -74,15 +74,6 @@ class Alarm(models.Model):
         return f"Alarm {self.alarm_id} - {self.topic}"
 
 
-class TelegramSubscriber(models.Model):
-    chat_id = models.BigIntegerField(unique=True)
-    subscribed_monitors = models.JSONField(default=list)
-    username = models.CharField(max_length=255, blank=True, null=True)
-    subscribed_at = models.DateTimeField(auto_now_add=True)
-
-    def __str__(self):
-        return f"Subscriber {self.chat_id} - {self.username or 'Unknown'}"
-
 
 class Monitor(models.Model):
     monitor_id = models.CharField(max_length=255, unique=True)
@@ -93,3 +84,110 @@ class Monitor(models.Model):
 
     def __str__(self):
         return f"{self.monitor_name} (ID: {self.monitor_id})"
+    
+    
+class TelegramSubscriber(models.Model):
+    chat_id = models.BigIntegerField(unique=True)
+
+    # Legacy storage (до перехода на ManyToMany). Оставлено для обратной совместимости/миграции.
+    subscribed_monitor_ids = models.JSONField(default=list, blank=True)
+
+    subscribed_monitors = models.ManyToManyField(
+        'Monitor',
+        related_name='subscribers',
+        blank=True,
+        verbose_name='Подписанные мониторы',
+        through='TelegramSubscriberMonitorSubscription',
+    )
+    username = models.CharField(max_length=255, blank=True, null=True)
+    subscribed_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"Subscriber {self.chat_id} - {self.username or 'Unknown'}"
+
+
+class TelegramSubscriberMonitorSubscription(models.Model):
+    """Связь many-to-many между TelegramSubscriber и Monitor."""
+
+    subscriber = models.ForeignKey(TelegramSubscriber, on_delete=models.CASCADE)
+    monitor = models.ForeignKey(Monitor, on_delete=models.CASCADE)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'subscribed_monitors'
+        unique_together = (
+            ('subscriber', 'monitor'),
+        )
+        verbose_name = 'Подписка на монитор'
+        verbose_name_plural = 'Подписки на мониторы'
+
+    def __str__(self):
+        return f"{self.subscriber_id} -> {self.monitor_id}"
+
+
+class TelegramReportSubscription(models.Model):
+    """Настройки периодической отправки отчётов подписчику в Telegram."""
+
+    FREQ_EVERY_10_MIN = "10m"
+    FREQ_HOURLY = "hourly"
+    FREQ_DAILY = "daily"
+    FREQ_WEEKLY = "weekly"
+    FREQ_MONTHLY = "monthly"
+
+    FREQUENCY_CHOICES = (
+        (FREQ_EVERY_10_MIN, "Каждые 10 минут"),
+        (FREQ_HOURLY, "Каждый час"),
+        (FREQ_DAILY, "Каждый день"),
+        (FREQ_WEEKLY, "Каждую неделю"),
+        (FREQ_MONTHLY, "Каждый месяц"),
+    )
+
+    subscriber = models.ForeignKey(
+        TelegramSubscriber,
+        on_delete=models.CASCADE,
+        related_name="report_subscriptions",
+        verbose_name="Подписчик",
+    )
+    monitors = models.ManyToManyField(
+        Monitor,
+        blank=True,
+        related_name="report_subscriptions",
+        verbose_name="Мониторы",
+        help_text="Если не выбрать мониторы — отчёт будет по всем мониторам.",
+    )
+
+    # Период относительно текущего времени на момент отправки.
+    # Пример: from=60, to=0 => последние 60 минут.
+    period_from_minutes = models.PositiveIntegerField(
+        default=60,
+        verbose_name="Период ОТ (минут назад)",
+    )
+    period_to_minutes = models.PositiveIntegerField(
+        default=0,
+        verbose_name="Период ДО (минут назад)",
+        help_text="0 означает 'по текущее время'.",
+    )
+
+    frequency = models.CharField(
+        max_length=16,
+        choices=FREQUENCY_CHOICES,
+        default=FREQ_HOURLY,
+        verbose_name="Частота отправки",
+    )
+
+    send_pdf = models.BooleanField(default=True, verbose_name="Отправлять PDF")
+    send_xlsx = models.BooleanField(default=True, verbose_name="Отправлять Excel (XLSX)")
+
+    enabled = models.BooleanField(default=True, verbose_name="Включено")
+    last_sent_at = models.DateTimeField(null=True, blank=True, verbose_name="Последняя отправка")
+    next_run_at = models.DateTimeField(null=True, blank=True, db_index=True, verbose_name="Следующая отправка")
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Подписка на отчёты"
+        verbose_name_plural = "Подписки на отчёты"
+
+    def __str__(self):
+        return f"ReportSubscription(subscriber={self.subscriber_id}, freq={self.frequency})"

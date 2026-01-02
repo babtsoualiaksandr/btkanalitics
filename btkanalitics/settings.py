@@ -115,7 +115,7 @@ AUTH_PASSWORD_VALIDATORS = [
 
 LANGUAGE_CODE = 'en-us'
 
-TIME_ZONE = 'UTC'
+TIME_ZONE = 'Europe/Minsk'
 
 USE_I18N = True
 
@@ -139,3 +139,11 @@ CELERY_TASK_TIME_LIMIT = config('CELERY_TASK_TIME_LIMIT', default=60 * 60 * 24, 
 CELERY_TASK_SOFT_TIME_LIMIT = config('CELERY_TASK_SOFT_TIME_LIMIT', default=60 * 60 * 23, cast=int)
 CELERY_WORKER_PREFETCH_MULTIPLIER = config('CELERY_WORKER_PREFETCH_MULTIPLIER', default=1, cast=int)
 CELERY_TASK_ACKS_LATE = True
+
+# Периодические задачи (Celery Beat)
+CELERY_BEAT_SCHEDULE = {
+    "send_due_telegram_reports_every_minute": {
+        "task": "agromash.send_due_telegram_reports",
+        "schedule": 60.0,
+    },
+}

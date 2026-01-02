@@ -5,10 +5,14 @@ from celery import shared_task
 from celery.exceptions import SoftTimeLimitExceeded
 from celery.result import AsyncResult
 from django.conf import settings
+from django.db.models import Q
 from django.utils import timezone
 
-from agromash.models import AccountVideoAnalytics
+from agromash.models import AccountVideoAnalytics, TelegramReportSubscription
 from agromash.services.parse_event_runner import ParserRunContext, run_parse_event
+from agromash.services.report_scheduler import compute_next_run_at
+from agromash.services.reporting import generate_report_attachments
+from agromash.services.telegram_client import send_document, send_message
 
 
 logger = logging.getLogger(__name__)
@@ -68,3 +72,46 @@ def is_task_active(task_id: str) -> bool:
         return res.state in ("PENDING", "RECEIVED", "STARTED", "RETRY")
     except Exception:
         return False
+
+
+@shared_task(name="agromash.send_due_telegram_reports")
+def send_due_telegram_reports() -> None:
+    """Периодическая задача: отправляет отчёты тем подпискам, у которых подошёл срок."""
+    now = timezone.now()
+
+    due_qs = (
+        TelegramReportSubscription.objects.filter(enabled=True)
+        .filter(Q(next_run_at__lte=now) | Q(next_run_at__isnull=True))
+        .select_related("subscriber")
+        .prefetch_related("monitors")
+        .order_by("id")
+    )
+
+    for sub in due_qs:
+        # если next_run_at не задан — считаем, что можно отправить сразу
+        if sub.next_run_at and sub.next_run_at > now:
+            continue
+
+        if not sub.subscriber_id or not getattr(sub.subscriber, "chat_id", None):
+            continue
+
+        try:
+            caption, attachments = generate_report_attachments(sub=sub, now=now)
+            if not attachments:
+                # если не удалось собрать файлы (нет библиотек) — хотя бы уведомим
+                send_message(chat_id=sub.subscriber.chat_id, text=caption)
+            else:
+                for idx, (filename, content, mime_type) in enumerate(attachments):
+                    send_document(
+                        chat_id=sub.subscriber.chat_id,
+                        filename=filename,
+                        content=content,
+                        mime_type=mime_type,
+                        caption=caption if idx == 0 else None,
+                    )
+
+            sub.last_sent_at = now
+            sub.next_run_at = compute_next_run_at(now=now, frequency=sub.frequency)
+            sub.save(update_fields=["last_sent_at", "next_run_at", "updated_at"])
+        except Exception:
+            logger.exception("Ошибка отправки отчёта (subscription_id=%s)", sub.id)
