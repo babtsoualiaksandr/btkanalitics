@@ -1,0 +1,19 @@
+[Unit]
+Description=btkanalitics Celery worker
+After=network.target
+
+[Service]
+Type=simple
+User=sshbeltelecom
+WorkingDirectory=/home/sshbeltelecom/va/btkanalitics
+EnvironmentFile=/home/sshbeltelecom/va/btkanalitics/.env
+
+ExecStart=/usr/bin/env bash -lc '/home/sshbeltelecom/va/venv/bin/celery -A btkanalitics worker -l info'
+
+Restart=always
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=60
+
+[Install]
+WantedBy=btkanalitics.target

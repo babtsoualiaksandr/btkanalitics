@@ -2,7 +2,7 @@ from django.test import TestCase
 from django.utils import timezone
 
 from agromash.models import AccountVideoAnalytics, Alarm, Monitor, TelegramReportSubscription, TelegramSubscriber
-from agromash.services.alarm_data_parser import parse_alarm_data
+from agromash.services.alarm_data_parser import format_alarm_caption, parse_alarm_data
 from agromash.services.report_scheduler import compute_next_run_at
 from agromash.services.reporting import get_alarms_for_subscription
 
@@ -97,6 +97,47 @@ class AlarmDataParserTest(TestCase):
         parsed = parse_alarm_data(payload)
         self.assertEqual(parsed.topic, "FaceNotMatched")
         self.assertEqual(parsed.details.get("attributes", {}).get("age"), 43)
+
+    def test_parse_plate_matched_includes_identities_and_owner(self):
+        payload = {
+            "id": "1857:1767416611422:32681343486071549",
+            "topic": "PlateMatched",
+            "level": 1,
+            "monitor_id": 332,
+            "params": {
+                "plate": {"state": "BY", "valid": True, "number": "am18686", "recognition_time": 1767416553344},
+                "identities": [
+                    {
+                        "list": {"id": 104, "name": "БУЭС", "level": 1},
+                        "plates": [
+                            {
+                                "id": 1025,
+                                "state": "BY",
+                                "number": "AM18686",
+                                "owner_last_name": "Гусейнов",
+                                "owner_first_name": "Н.",
+                                "owner_middle_name": "802003121",
+                            }
+                        ],
+                    }
+                ],
+            },
+        }
+
+        parsed = parse_alarm_data(payload)
+        self.assertEqual(parsed.topic, "PlateMatched")
+        self.assertEqual(parsed.details.get("matched_list_name"), "БУЭС")
+        self.assertEqual(parsed.details.get("matched_plate", {}).get("state"), "BY")
+        self.assertEqual(parsed.details.get("matched_plate", {}).get("number"), "AM18686")
+        self.assertEqual(parsed.details.get("matched_plate", {}).get("owner_last_name"), "Гусейнов")
+        self.assertEqual(parsed.details.get("matched_plate", {}).get("owner_first_name"), "Н.")
+        self.assertEqual(parsed.details.get("matched_plate", {}).get("owner_middle_name"), "802003121")
+
+        caption = format_alarm_caption(parsed)
+        self.assertIn("PlateMatched", caption)
+        self.assertIn("list=БУЭС", caption)
+        self.assertIn("plate=BY AM18686", caption)
+        self.assertIn("owner=Гусейнов Н. 802003121", caption)
 
 
 class ReportSubscriptionTest(TestCase):

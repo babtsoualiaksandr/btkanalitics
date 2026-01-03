@@ -1,0 +1,8 @@
+[Unit]
+Description=btkanalitics (web + celery worker + celery beat)
+Wants=btkanalitics-web.service btkanalitics-celery-worker.service btkanalitics-celery-beat.service
+After=btkanalitics-web.service btkanalitics-celery-worker.service btkanalitics-celery-beat.service
+
+[Install]
+WantedBy=multi-user.target
+

@@ -1,0 +1,22 @@
+[Unit]
+Description=btkanalitics Django dev server (runserver)
+After=network.target
+
+[Service]
+Type=simple
+User=sshbeltelecom
+WorkingDirectory=/home/sshbeltelecom/va/btkanalitics
+
+# Можно заменить на EnvironmentFile=/home/sshbeltelecom/va/btkanalitics/.env
+EnvironmentFile=/home/sshbeltelecom/va/btkanalitics/.env
+
+# Запуск через virtualenv (у вас: /home/sshbeltelecom/va/venv/bin)
+ExecStart=/usr/bin/env bash -lc '/home/sshbeltelecom/va/venv/bin/python manage.py runserver 0.0.0.0:8091'
+
+Restart=always
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+[Install]
+WantedBy=btkanalitics.target

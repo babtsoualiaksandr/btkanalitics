@@ -6,6 +6,7 @@
 Поддерживаемые topic (минимум):
   - LineCrossed
   - PlateNotMatched
+  - PlateMatched
   - FaceNotMatched
 
 Если topic неизвестен — возвращаем базовые поля + raw params.
@@ -95,7 +96,9 @@ def parse_alarm_data(alarm: Dict[str, Any]) -> ParsedAlarm:
     if topic == "LineCrossed":
         details = _parse_line_crossed(params)
     elif topic == "PlateNotMatched":
-        details = _parse_plate_not_matched(params)
+        details = _parse_plate_not_matched(params, alarm)
+    elif topic == "PlateMatched":
+        details = _parse_plate_matched(params, alarm)
     elif topic == "FaceNotMatched":
         details = _parse_face_not_matched(params)
     else:
@@ -166,11 +169,21 @@ def _parse_line_crossed(params: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _parse_plate_not_matched(params: Dict[str, Any]) -> Dict[str, Any]:
+def _parse_plate_not_matched(params: Dict[str, Any], alarm: Dict[str, Any]) -> Dict[str, Any]:
+    """PlateNotMatched.
+
+    В некоторых версиях API plate_identities может присутствовать на верхнем уровне.
+    В событии PlateNotMatched identities обычно пустые, но мы нормализуем их на всякий случай.
+    """
     plate = params.get("plate") if isinstance(params.get("plate"), dict) else {}
     obj = params.get("object") if isinstance(params.get("object"), dict) else {}
 
     object_type = obj.get("object_type") if isinstance(obj.get("object_type"), dict) else {}
+
+    identities_raw = params.get("identities") if isinstance(params.get("identities"), list) else None
+    if identities_raw is None:
+        identities_raw = alarm.get("plate_identities") if isinstance(alarm.get("plate_identities"), list) else []
+
     return {
         "plate_state": plate.get("state"),
         "plate_valid": plate.get("valid"),
@@ -179,9 +192,88 @@ def _parse_plate_not_matched(params: Dict[str, Any]) -> Dict[str, Any]:
         "object_id": obj.get("id"),
         "object_type": object_type.get("value"),
         "bounding_box": obj.get("bounding_box") if isinstance(obj.get("bounding_box"), dict) else {},
-        "identities": params.get("identities") if isinstance(params.get("identities"), list) else [],
+        "identities": identities_raw,
+        "identities_norm": _normalize_plate_identities(identities_raw),
         "reliability": params.get("reliability"),
     }
+
+
+def _parse_plate_matched(params: Dict[str, Any], alarm: Dict[str, Any]) -> Dict[str, Any]:
+    """PlateMatched.
+
+    Ожидается, что в params.identities/plate_identities придут списки и данные владельца.
+    """
+    plate = params.get("plate") if isinstance(params.get("plate"), dict) else {}
+    obj = params.get("object") if isinstance(params.get("object"), dict) else {}
+    object_type = obj.get("object_type") if isinstance(obj.get("object_type"), dict) else {}
+
+    identities_raw = params.get("identities") if isinstance(params.get("identities"), list) else None
+    if identities_raw is None:
+        identities_raw = alarm.get("plate_identities") if isinstance(alarm.get("plate_identities"), list) else []
+
+    identities_norm = _normalize_plate_identities(identities_raw)
+
+    return {
+        "plate_state": plate.get("state"),
+        "plate_valid": plate.get("valid"),
+        "plate_number": plate.get("number"),
+        "recognition_time": plate.get("recognition_time"),
+        "object_id": obj.get("id"),
+        "object_type": object_type.get("value"),
+        "bounding_box": obj.get("bounding_box") if isinstance(obj.get("bounding_box"), dict) else {},
+        "identities": identities_raw,
+        "identities_norm": identities_norm,
+        # быстрый доступ к «первому совпадению»
+        "matched_list_name": _get_in(identities_norm, [0, "list", "name"], None),
+        "matched_plate": _get_in(identities_norm, [0, "plates", 0], None),
+        "reliability": params.get("reliability"),
+    }
+
+
+def _normalize_plate_identities(identities: Any) -> List[Dict[str, Any]]:
+    """Привести plate identities к стабильной схеме.
+
+    На входе ожидается список вида:
+      [{"list": {...}, "plates": [{...}, ...]}, ...]
+    """
+    if not isinstance(identities, list):
+        return []
+
+    out: List[Dict[str, Any]] = []
+    for item in identities:
+        if not isinstance(item, dict):
+            continue
+
+        lst = item.get("list") if isinstance(item.get("list"), dict) else {}
+        plates = item.get("plates") if isinstance(item.get("plates"), list) else []
+
+        plates_norm: List[Dict[str, Any]] = []
+        for p in plates:
+            if not isinstance(p, dict):
+                continue
+            plates_norm.append(
+                {
+                    "id": p.get("id"),
+                    "state": p.get("state"),
+                    "number": p.get("number"),
+                    "owner_last_name": p.get("owner_last_name"),
+                    "owner_first_name": p.get("owner_first_name"),
+                    "owner_middle_name": p.get("owner_middle_name"),
+                }
+            )
+
+        out.append(
+            {
+                "list": {
+                    "id": lst.get("id"),
+                    "name": lst.get("name"),
+                    "level": lst.get("level"),
+                },
+                "plates": plates_norm,
+            }
+        )
+
+    return out
 
 
 def _parse_face_not_matched(params: Dict[str, Any]) -> Dict[str, Any]:
@@ -218,6 +310,26 @@ def format_alarm_caption(parsed: ParsedAlarm) -> str:
         plate = parsed.details.get("plate_number")
         if plate:
             parts.append(f"plate={plate}")
+
+    if parsed.topic == "PlateMatched":
+        # Нужно отобразить имя списка + данные по номеру (для Telegram и отчётов).
+        list_name = parsed.details.get("matched_list_name")
+        if list_name:
+            parts.append(f"list={list_name}")
+
+        matched_plate = parsed.details.get("matched_plate")
+        if isinstance(matched_plate, dict):
+            st = matched_plate.get("state")
+            num = matched_plate.get("number")
+            if st or num:
+                parts.append(f"plate={st or ''} {num or ''}".strip())
+
+            ln = matched_plate.get("owner_last_name")
+            fn = matched_plate.get("owner_first_name")
+            mn = matched_plate.get("owner_middle_name")
+            owner_parts = [p for p in [ln, fn, mn] if p]
+            if owner_parts:
+                parts.append("owner=" + " ".join(str(p) for p in owner_parts))
     if parsed.topic == "FaceNotMatched":
         gender = _get_in(parsed.details, ["attributes", "gender"], None)
         age = _get_in(parsed.details, ["attributes", "age"], None)
@@ -229,4 +341,3 @@ def format_alarm_caption(parsed: ParsedAlarm) -> str:
             parts.append(f"obj={best_class}")
 
     return " | ".join(parts) or "Alarm"
-

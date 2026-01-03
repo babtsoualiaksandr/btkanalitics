@@ -1,0 +1,20 @@
+[Unit]
+Description=btkanalitics Celery beat
+After=network.target
+
+[Service]
+Type=simple
+User=sshbeltelecom
+WorkingDirectory=/home/sshbeltelecom/va/btkanalitics
+EnvironmentFile=/home/sshbeltelecom/va/btkanalitics/.env
+
+# --pidfile= отключает pidfile, чтобы не было проблем с правами.
+ExecStart=/usr/bin/env bash -lc '/home/sshbeltelecom/va/venv/bin/celery -A btkanalitics beat -l info --pidfile='
+
+Restart=always
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+[Install]
+WantedBy=btkanalitics.target
