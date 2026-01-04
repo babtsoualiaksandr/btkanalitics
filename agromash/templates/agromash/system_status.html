@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>BTK Analitics — System Status</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; padding: 16px; }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { border: 1px solid #ddd; padding: 8px; text-align: left; vertical-align: top; }
+    th { background: #f6f6f6; }
+    code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+    pre { white-space: pre-wrap; background: #0b1020; color: #e8eeff; padding: 12px; border-radius: 8px; overflow-x: auto; }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; color: #fff; }
+    .active { background: #1f7a1f; }
+    .stale { background: #7a5b1f; }
+    .unknown { background: #444; }
+    .logbox { max-height: 320px; overflow: auto; }
+    .muted { color: #666; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <h1>System Status</h1>
+
+  <h2>Systemd units</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Unit</th>
+        <th>ActiveState</th>
+        <th>SubState</th>
+        <th>UnitFileState</th>
+        <th>Ошибки (если есть)</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for u in unit_states %}
+        <tr>
+          <td><code>{{ u.unit }}</code></td>
+          <td>{{ u.ActiveState|default:"-" }}</td>
+          <td>{{ u.SubState|default:"-" }}</td>
+          <td>{{ u.UnitFileState|default:"-" }}</td>
+          <td>{{ u.error|default:"" }}</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <h2>Парсеры</h2>
+  <div class="muted">Запущенные парсеры определяются по `parser_status=running` и heartbeat не старше 2 минут.</div>
+  <table>
+    <thead>
+      <tr>
+        <th>Account</th>
+        <th>Организация</th>
+        <th>Статус</th>
+        <th>Task ID</th>
+        <th>Heartbeat</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for a in running_parsers %}
+        <tr>
+          <td>{{ a.name }}</td>
+          <td>{{ a.organization }}</td>
+          <td>{{ a.parser_status }}</td>
+          <td><code>{{ a.parser_task_id }}</code></td>
+          <td>{{ a.parser_heartbeat_at|date:"Y-m-d H:i:s" }}</td>
+        </tr>
+      {% empty %}
+        <tr><td colspan="5">Нет запущенных парсеров</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <h2>Monitors</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>monitor_id</th>
+        <th>Название</th>
+        <th>Topic</th>
+        <th>Статус</th>
+        <th>Последняя тревога</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for m in monitors %}
+        <tr>
+          <td><code>{{ m.monitor_id }}</code></td>
+          <td>{{ m.monitor_name }}</td>
+          <td>{{ m.topic }}</td>
+          <td>
+            <span class="badge {{ m.status }}">{{ m.status }}</span>
+          </td>
+          <td>
+            {% if m.last_alarm_at %}
+              {{ m.last_alarm_at|date:"Y-m-d H:i:s" }}
+            {% else %}
+              -
+            {% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <h2>Логи systemd (последние 100 строк по каждому сервису)</h2>
+  {% for j in service_logs %}
+    <h3><code>{{ j.unit }}</code></h3>
+    <div class="muted">cmd: <code>{{ j.cmd }}</code> | rc={{ j.rc }}</div>
+    {% if j.err %}
+      <pre class="logbox">{{ j.err }}</pre>
+    {% endif %}
+    <pre class="logbox">{{ j.out }}</pre>
+  {% endfor %}
+
+  <h2>Telegram: последние отправки</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Время</th>
+        <th>chat_id</th>
+        <th>Подписчик</th>
+        <th>kind</th>
+        <th>ok</th>
+        <th>status</th>
+        <th>alarm</th>
+        <th>text/filename</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for e in telegram_logs %}
+        <tr>
+          <td>{{ e.created_at|date:"Y-m-d H:i:s" }}</td>
+          <td><code>{{ e.chat_id }}</code></td>
+          <td>
+            {% if e.subscriber %}
+              {{ e.subscriber.username }} ({{ e.subscriber.id }})
+            {% else %}
+              -
+            {% endif %}
+          </td>
+          <td>{{ e.kind }}</td>
+          <td>{{ e.ok }}</td>
+          <td>{{ e.status_code|default:"-" }}</td>
+          <td>{% if e.alarm %}{{ e.alarm.alarm_id }}{% else %}-{% endif %}</td>
+          <td>
+            {% if e.filename %}<code>{{ e.filename }}</code>{% endif %}
+            {% if e.text %}<div class="muted">{{ e.text|truncatechars:200 }}</div>{% endif %}
+          </td>
+        </tr>
+      {% empty %}
+        <tr><td colspan="8">Пока нет записей</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <h2>Отчёты: последние генерации</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Время</th>
+        <th>subscription</th>
+        <th>subscriber</th>
+        <th>ok</th>
+        <th>alarms</th>
+        <th>attachments</th>
+        <th>duration_ms</th>
+        <th>error</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in report_logs %}
+        <tr>
+          <td>{{ r.created_at|date:"Y-m-d H:i:s" }}</td>
+          <td>{% if r.subscription %}{{ r.subscription.id }}{% else %}-{% endif %}</td>
+          <td>{% if r.subscriber %}{{ r.subscriber.username }} ({{ r.subscriber.id }}){% else %}-{% endif %}</td>
+          <td>{{ r.ok }}</td>
+          <td>{{ r.alarms_count }}</td>
+          <td>{{ r.attachments_count }}</td>
+          <td>{{ r.duration_ms|default:"-" }}</td>
+          <td class="muted">{{ r.error|default:"" }}</td>
+        </tr>
+      {% empty %}
+        <tr><td colspan="8">Пока нет записей</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</body>
+</html>

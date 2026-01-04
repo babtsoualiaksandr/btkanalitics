@@ -1,0 +1,38 @@
+{% extends "admin/base.html" %}
+{% load static %}
+
+{#
+  Шаблон-override для Django admin.
+  - favicon на вкладке браузера
+  - остальное (title/branding) берётся из стандартных шаблонов и значений
+    `admin.site.site_title/site_header` (см. agromash/admin.py)
+#}
+
+{% block extrahead %}
+  {{ block.super }}
+  <link rel="icon" type="image/svg+xml" href="{% static 'agromash/favicon.svg' %}">
+  <style>
+    .agromash-admin-toplink {
+      display: inline-block;
+      margin-left: 12px;
+      padding: 6px 10px;
+      border-radius: 6px;
+      background: #0b5fff;
+      color: #fff;
+      text-decoration: none;
+      font-weight: 600;
+      line-height: 1;
+    }
+    .agromash-admin-toplink:hover { filter: brightness(0.95); }
+  </style>
+{% endblock %}
+
+{% block branding %}
+  {{ block.super }}
+  <a class="agromash-admin-toplink" href="{% url 'admin_system_status' %}">System Status</a>
+{% endblock %}
+
+{% block nav-global %}
+  {{ block.super }}
+  <a class="agromash-admin-toplink" href="{% url 'admin_system_status' %}">System Status</a>
+{% endblock %}

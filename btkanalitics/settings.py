@@ -61,7 +61,11 @@ ROOT_URLCONF = 'btkanalitics.urls'
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [],
+        # Важно: overrides Django admin шаблонов (base_site.html, index.html)
+        # лежат в `agromash/templates/`. Добавляем этот путь в DIRS, иначе
+        # при APP_DIRS=True будет браться шаблон из `django.contrib.admin`
+        # (так как он идет раньше в INSTALLED_APPS).
+        'DIRS': [BASE_DIR / 'agromash' / 'templates'],
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [

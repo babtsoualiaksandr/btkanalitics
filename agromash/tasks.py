@@ -1,4 +1,5 @@
 import logging
+import time
 from typing import Optional
 
 from celery import shared_task
@@ -8,7 +9,7 @@ from django.conf import settings
 from django.db.models import Q
 from django.utils import timezone
 
-from agromash.models import AccountVideoAnalytics, TelegramReportSubscription
+from agromash.models import AccountVideoAnalytics, ReportRunLog, TelegramReportSubscription
 from agromash.services.parse_event_runner import ParserRunContext, run_parse_event
 from agromash.services.report_scheduler import compute_next_run_at
 from agromash.services.reporting import generate_report_attachments
@@ -95,11 +96,23 @@ def send_due_telegram_reports() -> None:
         if not sub.subscriber_id or not getattr(sub.subscriber, "chat_id", None):
             continue
 
+        started_at = timezone.now()
+        t0 = time.monotonic()
+        run_log = ReportRunLog.objects.create(
+            subscription=sub,
+            subscriber=sub.subscriber,
+            started_at=started_at,
+        )
+
         try:
-            caption, attachments = generate_report_attachments(sub=sub, now=now)
+            caption, attachments, rows_count = generate_report_attachments(sub=sub, now=now)
             if not attachments:
                 # если не удалось собрать файлы (нет библиотек) — хотя бы уведомим
-                send_message(chat_id=sub.subscriber.chat_id, text=caption)
+                send_message(
+                    chat_id=sub.subscriber.chat_id,
+                    text=caption,
+                    meta={"source": "celery", "subscription_id": sub.id},
+                )
             else:
                 for idx, (filename, content, mime_type) in enumerate(attachments):
                     send_document(
@@ -108,10 +121,35 @@ def send_due_telegram_reports() -> None:
                         content=content,
                         mime_type=mime_type,
                         caption=caption if idx == 0 else None,
+                        meta={"source": "celery", "subscription_id": sub.id},
                     )
 
             sub.last_sent_at = now
             sub.next_run_at = compute_next_run_at(now=now, frequency=sub.frequency)
             sub.save(update_fields=["last_sent_at", "next_run_at", "updated_at"])
+
+            finished_at = timezone.now()
+            run_log.finished_at = finished_at
+            run_log.duration_ms = int((time.monotonic() - t0) * 1000)
+            run_log.ok = True
+            run_log.error = ""
+            run_log.alarms_count = int(rows_count or 0)
+            run_log.attachments_count = len(attachments or [])
+            run_log.save(
+                update_fields=[
+                    "finished_at",
+                    "duration_ms",
+                    "ok",
+                    "error",
+                    "alarms_count",
+                    "attachments_count",
+                ]
+            )
         except Exception:
             logger.exception("Ошибка отправки отчёта (subscription_id=%s)", sub.id)
+            finished_at = timezone.now()
+            run_log.finished_at = finished_at
+            run_log.duration_ms = int((time.monotonic() - t0) * 1000)
+            run_log.ok = False
+            run_log.error = "exception"
+            run_log.save(update_fields=["finished_at", "duration_ms", "ok", "error"])

@@ -1,0 +1,21 @@
+{% extends "admin/index.html" %}
+
+{% block content %}
+  <div class="app-system module">
+    <table>
+      <caption>
+        <a href="{% url 'admin_system_status' %}" class="section" title="System Status">System</a>
+      </caption>
+      <tbody>
+        <tr>
+          <th scope="row">
+            <a href="{% url 'admin_system_status' %}">System Status</a>
+          </th>
+          <td class="quiet">Мониторы / systemd / логи / Telegram / отчёты</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  {{ block.super }}
+{% endblock %}

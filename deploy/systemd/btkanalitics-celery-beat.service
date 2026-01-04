@@ -1,5 +1,6 @@
 [Unit]
 Description=btkanalitics Celery beat
+PartOf=btkanalitics.target
 After=network.target
 
 [Service]

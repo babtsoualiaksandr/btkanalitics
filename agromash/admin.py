@@ -1,5 +1,11 @@
 from django.contrib import admin, messages
 from django import forms
+import logging
+import time
+from django.contrib.auth import password_validation
+from django.contrib.auth.admin import UserAdmin as DjangoUserAdmin
+from django.contrib.auth.forms import UserChangeForm as DjangoUserChangeForm
+from django.contrib.auth.models import User
 from django.utils.html import format_html
 from django.utils import timezone
 import datetime
@@ -14,12 +20,95 @@ from .models import (
     AccountVideoAnalytics,
     Alarm,
     Monitor,
+    ReportRunLog,
     TelegramReportSubscription,
     TelegramSubscriber,
     TelegramSubscriberMonitorSubscription,
 )
 
 from .tasks import parse_event_task, request_stop_parser
+from .services.report_scheduler import compute_next_run_at
+from .services.reporting import generate_report_attachments
+from .services.telegram_client import send_document, send_message
+
+# -----------------
+# Django admin: название во вкладке браузера / заголовки
+# -----------------
+# В стандартных шаблонах Django admin текст во вкладке формируется на основе
+# `admin.site.site_title`.
+admin.site.site_header = "BTK Analitics"
+admin.site.site_title = "BTK Analitics Admin"
+admin.site.index_title = "Управление"
+
+
+# -----------------
+# Django admin: удобная установка пароля для Users (Authentication and Authorization)
+# -----------------
+class UserChangeFormWithPassword(DjangoUserChangeForm):
+    """Добавляет поля для установки нового пароля прямо на странице редактирования User."""
+
+    new_password1 = forms.CharField(
+        label="Новый пароль",
+        widget=forms.PasswordInput(render_value=False),
+        required=False,
+        help_text="Если оставить пустым — пароль не изменится.",
+    )
+    new_password2 = forms.CharField(
+        label="Повторите пароль",
+        widget=forms.PasswordInput(render_value=False),
+        required=False,
+    )
+
+    def clean(self):
+        cleaned = super().clean()
+        p1 = cleaned.get("new_password1")
+        p2 = cleaned.get("new_password2")
+
+        # Оба поля пустые => пароль не меняем.
+        if not p1 and not p2:
+            return cleaned
+
+        if p1 != p2:
+            raise forms.ValidationError("Пароли не совпадают")
+
+        # Учитываем настройки валидаторов паролей Django.
+        password_validation.validate_password(p1, self.instance)
+        return cleaned
+
+    def save(self, commit=True):
+        user = super().save(commit=False)
+        p1 = self.cleaned_data.get("new_password1")
+        if p1:
+            user.set_password(p1)
+
+        if commit:
+            user.save()
+            self.save_m2m()
+        return user
+
+
+class UserAdminWithPassword(DjangoUserAdmin):
+    form = UserChangeFormWithPassword
+
+    # Добавляем блок с полями пароля в форму редактирования.
+    fieldsets = DjangoUserAdmin.fieldsets + (
+        (
+            "Смена пароля",
+            {
+                "fields": (
+                    "new_password1",
+                    "new_password2",
+                )
+            },
+        ),
+    )
+
+
+try:
+    admin.site.unregister(User)
+except admin.sites.NotRegistered:
+    pass
+admin.site.register(User, UserAdminWithPassword)
 
 
 def parse_event_action(modeladmin, request, queryset):
@@ -394,3 +483,111 @@ class TelegramReportSubscriptionAdmin(admin.ModelAdmin):
     )
     filter_horizontal = ("monitors",)
     autocomplete_fields = ("subscriber",)
+
+    def get_list_display(self, request):
+        base = super().get_list_display(request)
+
+        def send_now_controls(obj: TelegramReportSubscription):
+            return self._send_now_controls(request, obj)
+
+        send_now_controls.short_description = "Отчёт"
+        return (*base, send_now_controls)
+
+    def get_urls(self):
+        urls = super().get_urls()
+        custom_urls = [
+            path(
+                '<path:object_id>/send-now/',
+                self.admin_site.admin_view(self.send_now_view),
+                name='agromash_telegramreportsubscription_send_now',
+            ),
+        ]
+        return custom_urls + urls
+
+    def _send_now_controls(self, request, obj: TelegramReportSubscription):
+        csrf = get_token(request)
+        send_now_url = reverse('admin:agromash_telegramreportsubscription_send_now', args=[obj.pk])
+
+        disabled = "" if (obj.subscriber_id and getattr(obj.subscriber, 'chat_id', None)) else "disabled"
+        title = "" if not disabled else "Нет chat_id у подписчика"
+
+        return format_html(
+            '<form method="post" action="{}" style="display:inline">'
+            '<input type="hidden" name="csrfmiddlewaretoken" value="{}">'
+            '<button type="submit" class="button" {} title="{}">Сформировать и отправить</button>'
+            '</form>',
+            send_now_url,
+            csrf,
+            disabled,
+            title,
+        )
+
+    def send_now_view(self, request, object_id):
+        if request.method != 'POST':
+            return HttpResponseNotAllowed(['POST'])
+
+        sub: TelegramReportSubscription = self.get_object(request, object_id)
+        if sub is None:
+            raise Http404('TelegramReportSubscription not found')
+
+        if not sub.subscriber_id or not getattr(sub.subscriber, 'chat_id', None):
+            self.message_user(request, 'У подписчика не задан chat_id — отправка невозможна', level=messages.ERROR)
+            return redirect(request.META.get('HTTP_REFERER') or reverse('admin:agromash_telegramreportsubscription_changelist'))
+
+        now = timezone.now()
+        t0 = time.monotonic()
+        run_log = ReportRunLog.objects.create(subscription=sub, subscriber=sub.subscriber, started_at=now)
+
+        try:
+            caption, attachments, rows_count = generate_report_attachments(sub=sub, now=now)
+            if not attachments:
+                send_message(chat_id=sub.subscriber.chat_id, text=caption, meta={"source": "admin", "subscription_id": sub.id})
+            else:
+                for idx, (filename, content, mime_type) in enumerate(attachments):
+                    send_document(
+                        chat_id=sub.subscriber.chat_id,
+                        filename=filename,
+                        content=content,
+                        mime_type=mime_type,
+                        caption=caption if idx == 0 else None,
+                        meta={"source": "admin", "subscription_id": sub.id},
+                    )
+
+            sub.last_sent_at = now
+            sub.next_run_at = compute_next_run_at(now=now, frequency=sub.frequency)
+            sub.save(update_fields=["last_sent_at", "next_run_at", "updated_at"])
+
+            run_log.finished_at = timezone.now()
+            run_log.duration_ms = int((time.monotonic() - t0) * 1000)
+            run_log.ok = True
+            run_log.error = ""
+            run_log.alarms_count = int(rows_count or 0)
+            run_log.attachments_count = len(attachments or [])
+            run_log.save(
+                update_fields=[
+                    "finished_at",
+                    "duration_ms",
+                    "ok",
+                    "error",
+                    "alarms_count",
+                    "attachments_count",
+                ]
+            )
+
+            self.message_user(
+                request,
+                f"Отчёт отправлен (subscription_id={sub.id}, rows={rows_count}, files={len(attachments)})",
+                level=messages.SUCCESS,
+            )
+        except Exception:
+            run_log.finished_at = timezone.now()
+            run_log.duration_ms = int((time.monotonic() - t0) * 1000)
+            run_log.ok = False
+            run_log.error = "exception"
+            run_log.save(update_fields=["finished_at", "duration_ms", "ok", "error"])
+
+            logger = logging.getLogger(__name__)
+            logger.exception("Ошибка ручной отправки отчёта (subscription_id=%s)", sub.id)
+            self.message_user(request, "Ошибка отправки отчёта — см. логи", level=messages.ERROR)
+
+        return redirect(request.META.get('HTTP_REFERER') or reverse('admin:agromash_telegramreportsubscription_changelist'))

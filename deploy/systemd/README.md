@@ -30,6 +30,31 @@ sudo systemctl stop btkanalitics.target
 sudo systemctl restart btkanalitics.target
 ```
 
+### Важно про stop у target
+
+Чтобы `systemctl stop btkanalitics.target` останавливал и сервисы, сервисные unit'ы должны иметь `PartOf=btkanalitics.target` в секции `[Unit]`.
+Это настроено в:
+
+- [`btkanalitics-web.service`](deploy/systemd/btkanalitics-web.service:1)
+- [`btkanalitics-celery-worker.service`](deploy/systemd/btkanalitics-celery-worker.service:1)
+- [`btkanalitics-celery-beat.service`](deploy/systemd/btkanalitics-celery-beat.service:1)
+
+После правок не забудьте:
+
+```bash
+sudo cp deploy/systemd/btkanalitics-*.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl restart btkanalitics.target
+```
+
+Если ранее сервисы включались отдельно (например, `enable btkanalitics-web.service`), то они могут продолжать жить независимо от target.
+В таком случае отключите их автозапуск и используйте только target:
+
+```bash
+sudo systemctl disable btkanalitics-web.service btkanalitics-celery-worker.service btkanalitics-celery-beat.service
+sudo systemctl enable --now btkanalitics.target
+```
+
 ## Логи
 
 ```bash

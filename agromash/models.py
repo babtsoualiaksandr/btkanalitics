@@ -191,3 +191,95 @@ class TelegramReportSubscription(models.Model):
 
     def __str__(self):
         return f"ReportSubscription(subscriber={self.subscriber_id}, freq={self.frequency})"
+
+
+class TelegramEventLog(models.Model):
+    """Журнал отправленных Telegram-оповещений (для dashboard/диагностики)."""
+
+    KIND_MESSAGE = "message"
+    KIND_PHOTO = "photo"
+    KIND_DOCUMENT = "document"
+
+    KIND_CHOICES = (
+        (KIND_MESSAGE, "Message"),
+        (KIND_PHOTO, "Photo"),
+        (KIND_DOCUMENT, "Document"),
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    subscriber = models.ForeignKey(
+        TelegramSubscriber,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="telegram_event_logs",
+    )
+    chat_id = models.BigIntegerField(db_index=True)
+
+    kind = models.CharField(max_length=16, choices=KIND_CHOICES, default=KIND_MESSAGE, db_index=True)
+    ok = models.BooleanField(default=True, db_index=True)
+    status_code = models.IntegerField(null=True, blank=True)
+    error = models.TextField(blank=True)
+
+    # Полезно для UI: что именно отправляли
+    text = models.TextField(blank=True)
+    filename = models.CharField(max_length=255, blank=True)
+
+    # Связь с Alarm, если это оповещение по тревоге
+    alarm = models.ForeignKey(
+        Alarm,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="telegram_event_logs",
+    )
+
+    meta = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        verbose_name = "Telegram log"
+        verbose_name_plural = "Telegram logs"
+        ordering = ("-created_at",)
+
+    def __str__(self):
+        return f"TelegramEventLog(chat_id={self.chat_id}, ok={self.ok}, kind={self.kind})"
+
+
+class ReportRunLog(models.Model):
+    """Журнал формирований/отправок отчётов (с временем генерации)."""
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    subscription = models.ForeignKey(
+        TelegramReportSubscription,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="run_logs",
+    )
+    subscriber = models.ForeignKey(
+        TelegramSubscriber,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="report_run_logs",
+    )
+
+    started_at = models.DateTimeField()
+    finished_at = models.DateTimeField(null=True, blank=True)
+    duration_ms = models.PositiveIntegerField(null=True, blank=True)
+
+    ok = models.BooleanField(default=True, db_index=True)
+    error = models.TextField(blank=True)
+
+    alarms_count = models.PositiveIntegerField(default=0)
+    attachments_count = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        verbose_name = "Report run log"
+        verbose_name_plural = "Report run logs"
+        ordering = ("-created_at",)
+
+    def __str__(self):
+        return f"ReportRunLog(subscription={self.subscription_id}, ok={self.ok})"

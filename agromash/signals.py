@@ -4,12 +4,12 @@ from django.db.models import Q
 
 from .models import Alarm, Monitor, TelegramSubscriber
 from .services.alarm_data_parser import format_alarm_caption, parse_alarm_data
-import requests
 from django.conf import settings
 
 import logging
 
 from .va_api_client import VAApiClient
+from .services.telegram_client import send_message, send_photo
 
 
 logger = logging.getLogger(__name__)
@@ -17,15 +17,8 @@ logger = logging.getLogger(__name__)
 
 def _telegram_send_message(*, chat_id: int, text: str) -> None:
     """Безопасная отправка сообщения в Telegram."""
-    token = getattr(settings, "TLG_BOT_TOKEN", None)
-    if not token:
-        return
     try:
-        requests.post(
-            f"https://api.telegram.org/bot{token}/sendMessage",
-            json={"chat_id": chat_id, "text": text},
-            timeout=10,
-        )
+        send_message(chat_id=chat_id, text=text, meta={"source": "signals"})
     except Exception:
         logger.exception("Ошибка отправки сообщения в Telegram (chat_id=%s)", chat_id)
 
@@ -61,9 +54,6 @@ def send_alarm_to_telegram(sender, instance, created, **kwargs):
                 img_resp = client.request('GET', instance.original_quality_snapshot)
                 try:
                     if img_resp.status_code == 200:
-                        telegram_url = f'https://api.telegram.org/bot{token}/sendPhoto'
-                        files = {'photo': ('snapshot.jpg', img_resp.content, 'image/jpeg')}
-
                         # Формируем caption из распарсенного Alarm.data (topic-зависимая логика).
                         try:
                             parsed_alarm = parse_alarm_data(instance.data or {})
@@ -79,8 +69,19 @@ def send_alarm_to_telegram(sender, instance, created, **kwargs):
                         # (Ранее отправлялось всем, игнорируя настройки подписок.)
                         chat_ids_list = _get_alarm_subscribers_chat_ids(instance)
                         for chat_id in chat_ids_list:
-                            data = {'chat_id': chat_id, 'caption': caption}
-                            requests.post(telegram_url, data=data, files=files, timeout=10)
+                            send_photo(
+                                chat_id=chat_id,
+                                filename="snapshot.jpg",
+                                content=img_resp.content,
+                                mime_type="image/jpeg",
+                                caption=caption,
+                                alarm=instance,
+                                meta={
+                                    "source": "alarm_signal",
+                                    "alarm_id": instance.alarm_id,
+                                    "topic": instance.topic,
+                                },
+                            )
                         logger.info(
                             "Alarm отправлен в Telegram (alarm_id=%s, subscribers=%s)",
                             instance.alarm_id,

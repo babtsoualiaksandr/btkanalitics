@@ -1,0 +1,237 @@
+{% extends "admin/base_site.html" %}
+
+{% block title %}System Status | {{ site_title|default:"Django site admin" }}{% endblock %}
+
+{% block content %}
+  <style>
+    .logbox { max-height: 320px; overflow: auto; white-space: pre; background: #0b1020; color: #e8eeff; padding: 12px; border-radius: 8px; }
+    .muted { color: #666; font-size: 12px; }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; color: #fff; }
+    .active { background: #1f7a1f; }
+    .stale { background: #7a5b1f; }
+    .unknown { background: #444; }
+    table { width: 100%; }
+    th { white-space: nowrap; }
+    code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+  </style>
+
+  <h1>System Status</h1>
+
+  <h2>Systemd units</h2>
+  <div class="module">
+    <table>
+      <thead>
+        <tr>
+          <th>Unit</th>
+          <th>ActiveState</th>
+          <th>SubState</th>
+          <th>UnitFileState</th>
+          <th>Ошибки</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for u in unit_states %}
+          <tr>
+            <td><code>{{ u.unit }}</code></td>
+            <td>{{ u.ActiveState|default:"-" }}</td>
+            <td>{{ u.SubState|default:"-" }}</td>
+            <td>{{ u.UnitFileState|default:"-" }}</td>
+            <td>{{ u.error|default:"" }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <h2>Парсеры</h2>
+  <div class="muted">Запущенные парсеры определяются по `parser_status=running` и heartbeat не старше 2 минут.</div>
+  <div class="module">
+    <table>
+      <thead>
+        <tr>
+          <th>Account</th>
+          <th>Организация</th>
+          <th>Статус</th>
+          <th>Task ID</th>
+          <th>Heartbeat</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for a in running_parsers %}
+          <tr>
+            <td>{{ a.name }}</td>
+            <td>{{ a.organization }}</td>
+            <td>{{ a.parser_status }}</td>
+            <td><code>{{ a.parser_task_id }}</code></td>
+            <td>{{ a.parser_heartbeat_at|date:"Y-m-d H:i:s" }}</td>
+          </tr>
+        {% empty %}
+          <tr><td colspan="5">Нет запущенных парсеров</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <h2>Monitors</h2>
+  <div class="module">
+    <table>
+      <thead>
+        <tr>
+          <th>monitor_id</th>
+          <th>Название</th>
+          <th>Topic</th>
+          <th>Статус</th>
+          <th>Последняя тревога</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for m in monitors %}
+          <tr>
+            <td><code>{{ m.monitor_id }}</code></td>
+            <td>{{ m.monitor_name }}</td>
+            <td>{{ m.topic }}</td>
+            <td><span class="badge {{ m.status }}">{{ m.status }}</span></td>
+            <td>
+              {% if m.last_alarm_at %}
+                {{ m.last_alarm_at|date:"Y-m-d H:i:s" }}
+              {% else %}
+                -
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <h2>Логи systemd (последние 100 строк по каждому сервису)</h2>
+  {% for j in service_logs %}
+    {% with uid=j.unit|slugify %}
+    <h3><code>{{ j.unit }}</code></h3>
+    <div class="muted">cmd: <code>{{ j.cmd }}</code> | rc={{ j.rc }}</div>
+    <p>
+      <button
+        type="button"
+        class="button"
+        data-refresh-unit="{{ j.unit }}"
+        data-refresh-target="{{ uid }}"
+      >
+        Обновить лог
+      </button>
+      <span class="muted" id="status-{{ uid }}"></span>
+    </p>
+    {% if j.err %}
+      <div class="logbox" id="err-{{ uid }}">{{ j.err }}</div>
+    {% endif %}
+    <div class="logbox" id="out-{{ uid }}">{{ j.out }}</div>
+    {% endwith %}
+  {% endfor %}
+
+  <script>
+    (function () {
+      const endpoint = "{% url 'admin_systemd_log' %}";
+
+      async function refreshUnit(btn) {
+        const unit = btn.dataset.refreshUnit;
+        const target = btn.dataset.refreshTarget;
+        const statusEl = document.getElementById(`status-${target}`);
+        const outEl = document.getElementById(`out-${target}`);
+        const errEl = document.getElementById(`err-${target}`);
+
+        if (statusEl) statusEl.textContent = "обновление…";
+        btn.disabled = true;
+        try {
+          const url = `${endpoint}?unit=${encodeURIComponent(unit)}`;
+          const resp = await fetch(url, { headers: { "X-Requested-With": "XMLHttpRequest" } });
+          const data = await resp.json();
+          if (!resp.ok) {
+            throw new Error(data && data.error ? data.error : `HTTP ${resp.status}`);
+          }
+
+          if (outEl) outEl.textContent = data.out || "";
+          if (errEl) errEl.textContent = data.err || "";
+          if (statusEl) statusEl.textContent = `rc=${data.rc}`;
+        } catch (e) {
+          if (statusEl) statusEl.textContent = `ошибка: ${e}`;
+        } finally {
+          btn.disabled = false;
+        }
+      }
+
+      document.querySelectorAll("button[data-refresh-unit]").forEach((btn) => {
+        btn.addEventListener("click", () => refreshUnit(btn));
+      });
+    })();
+  </script>
+
+  <h2>Telegram: последние отправки</h2>
+  <div class="module">
+    <table>
+      <thead>
+        <tr>
+          <th>Время</th>
+          <th>chat_id</th>
+          <th>Подписчик</th>
+          <th>kind</th>
+          <th>ok</th>
+          <th>status</th>
+          <th>alarm</th>
+          <th>text/filename</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for e in telegram_logs %}
+          <tr>
+            <td>{{ e.created_at|date:"Y-m-d H:i:s" }}</td>
+            <td><code>{{ e.chat_id }}</code></td>
+            <td>{% if e.subscriber %}{{ e.subscriber.username }} ({{ e.subscriber.id }}){% else %}-{% endif %}</td>
+            <td>{{ e.kind }}</td>
+            <td>{{ e.ok }}</td>
+            <td>{{ e.status_code|default:"-" }}</td>
+            <td>{% if e.alarm %}{{ e.alarm.alarm_id }}{% else %}-{% endif %}</td>
+            <td>
+              {% if e.filename %}<code>{{ e.filename }}</code>{% endif %}
+              {% if e.text %}<div class="muted">{{ e.text|truncatechars:200 }}</div>{% endif %}
+            </td>
+          </tr>
+        {% empty %}
+          <tr><td colspan="8">Пока нет записей</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <h2>Отчёты: последние генерации</h2>
+  <div class="module">
+    <table>
+      <thead>
+        <tr>
+          <th>Время</th>
+          <th>subscription</th>
+          <th>subscriber</th>
+          <th>ok</th>
+          <th>alarms</th>
+          <th>attachments</th>
+          <th>duration_ms</th>
+          <th>error</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in report_logs %}
+          <tr>
+            <td>{{ r.created_at|date:"Y-m-d H:i:s" }}</td>
+            <td>{% if r.subscription %}{{ r.subscription.id }}{% else %}-{% endif %}</td>
+            <td>{% if r.subscriber %}{{ r.subscriber.username }} ({{ r.subscriber.id }}){% else %}-{% endif %}</td>
+            <td>{{ r.ok }}</td>
+            <td>{{ r.alarms_count }}</td>
+            <td>{{ r.attachments_count }}</td>
+            <td>{{ r.duration_ms|default:"-" }}</td>
+            <td class="muted">{{ r.error|default:"" }}</td>
+          </tr>
+        {% empty %}
+          <tr><td colspan="8">Пока нет записей</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+{% endblock %}

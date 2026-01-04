@@ -386,12 +386,13 @@ def generate_report_attachments(
     *,
     sub: TelegramReportSubscription,
     now: Optional[datetime.datetime] = None,
-) -> Tuple[str, List[Tuple[str, bytes, str]]]:
+) -> Tuple[str, List[Tuple[str, bytes, str]], int]:
     """Сформировать файлы отчёта.
 
     Возвращает:
       - caption
       - список вложений: (filename, content_bytes, mime_type)
+      - количество строк (alarms) в отчёте
     """
     now = now or timezone.now()
     alarms_qs = get_alarms_for_subscription(sub=sub, now=now)
@@ -434,4 +435,4 @@ def generate_report_attachments(
         if pdf:
             attachments.append((f"{base}.pdf", pdf, "application/pdf"))
 
-    return caption, attachments
+    return caption, attachments, len(rows)
