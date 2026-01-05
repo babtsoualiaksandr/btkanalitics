@@ -5,6 +5,7 @@
 {% block content %}
   <style>
     .logbox { max-height: 320px; overflow: auto; white-space: pre; background: #0b1020; color: #e8eeff; padding: 12px; border-radius: 8px; }
+    .tablebox { max-height: 340px; overflow: auto; border: 1px solid var(--hairline-color, #e3e3e3); border-radius: 8px; }
     .muted { color: #666; font-size: 12px; }
     .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; color: #fff; }
     .active { background: #1f7a1f; }
@@ -166,72 +167,78 @@
 
   <h2>Telegram: последние отправки</h2>
   <div class="module">
-    <table>
-      <thead>
-        <tr>
-          <th>Время</th>
-          <th>chat_id</th>
-          <th>Подписчик</th>
-          <th>kind</th>
-          <th>ok</th>
-          <th>status</th>
-          <th>alarm</th>
-          <th>text/filename</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for e in telegram_logs %}
+    <div class="muted">Показано 100 записей, видимая область ~10 строк (можно прокручивать).</div>
+    <div class="tablebox">
+      <table>
+        <thead>
           <tr>
-            <td>{{ e.created_at|date:"Y-m-d H:i:s" }}</td>
-            <td><code>{{ e.chat_id }}</code></td>
-            <td>{% if e.subscriber %}{{ e.subscriber.username }} ({{ e.subscriber.id }}){% else %}-{% endif %}</td>
-            <td>{{ e.kind }}</td>
-            <td>{{ e.ok }}</td>
-            <td>{{ e.status_code|default:"-" }}</td>
-            <td>{% if e.alarm %}{{ e.alarm.alarm_id }}{% else %}-{% endif %}</td>
-            <td>
-              {% if e.filename %}<code>{{ e.filename }}</code>{% endif %}
-              {% if e.text %}<div class="muted">{{ e.text|truncatechars:200 }}</div>{% endif %}
-            </td>
+            <th>Время</th>
+            <th>chat_id</th>
+            <th>Подписчик</th>
+            <th>kind</th>
+            <th>ok</th>
+            <th>status</th>
+            <th>alarm</th>
+            <th>text/filename</th>
           </tr>
-        {% empty %}
-          <tr><td colspan="8">Пока нет записей</td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {% for e in telegram_logs %}
+            <tr>
+              <td>{{ e.created_at|date:"Y-m-d H:i:s" }}</td>
+              <td><code>{{ e.chat_id }}</code></td>
+              <td>{% if e.subscriber %}{{ e.subscriber.username }} ({{ e.subscriber.id }}){% else %}-{% endif %}</td>
+              <td>{{ e.kind }}</td>
+              <td>{{ e.ok }}</td>
+              <td>{{ e.status_code|default:"-" }}</td>
+              <td>{% if e.alarm %}{{ e.alarm.alarm_id }}{% else %}-{% endif %}</td>
+              <td>
+                {% if e.filename %}<code>{{ e.filename }}</code>{% endif %}
+                {% if e.text %}<div class="muted">{{ e.text|truncatechars:200 }}</div>{% endif %}
+              </td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="8">Пока нет записей</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
   </div>
 
   <h2>Отчёты: последние генерации</h2>
   <div class="module">
-    <table>
-      <thead>
-        <tr>
-          <th>Время</th>
-          <th>subscription</th>
-          <th>subscriber</th>
-          <th>ok</th>
-          <th>alarms</th>
-          <th>attachments</th>
-          <th>duration_ms</th>
-          <th>error</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for r in report_logs %}
+    <div class="muted">Показано 100 записей, видимая область ~10 строк (можно прокручивать).</div>
+    <div class="tablebox">
+      <table>
+        <thead>
           <tr>
-            <td>{{ r.created_at|date:"Y-m-d H:i:s" }}</td>
-            <td>{% if r.subscription %}{{ r.subscription.id }}{% else %}-{% endif %}</td>
-            <td>{% if r.subscriber %}{{ r.subscriber.username }} ({{ r.subscriber.id }}){% else %}-{% endif %}</td>
-            <td>{{ r.ok }}</td>
-            <td>{{ r.alarms_count }}</td>
-            <td>{{ r.attachments_count }}</td>
-            <td>{{ r.duration_ms|default:"-" }}</td>
-            <td class="muted">{{ r.error|default:"" }}</td>
+            <th>Время</th>
+            <th>subscription</th>
+            <th>subscriber</th>
+            <th>ok</th>
+            <th>alarms</th>
+            <th>attachments</th>
+            <th>duration_ms</th>
+            <th>error</th>
           </tr>
-        {% empty %}
-          <tr><td colspan="8">Пока нет записей</td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {% for r in report_logs %}
+            <tr>
+              <td>{{ r.created_at|date:"Y-m-d H:i:s" }}</td>
+              <td>{% if r.subscription %}{{ r.subscription.id }}{% else %}-{% endif %}</td>
+              <td>{% if r.subscriber %}{{ r.subscriber.username }} ({{ r.subscriber.id }}){% else %}-{% endif %}</td>
+              <td>{{ r.ok }}</td>
+              <td>{{ r.alarms_count }}</td>
+              <td>{{ r.attachments_count }}</td>
+              <td>{{ r.duration_ms|default:"-" }}</td>
+              <td class="muted">{{ r.error|default:"" }}</td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="8">Пока нет записей</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
   </div>
 {% endblock %}

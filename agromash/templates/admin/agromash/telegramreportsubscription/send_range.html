@@ -1,0 +1,24 @@
+{% extends "admin/base_site.html" %}
+
+{% block title %}{{ title }} | {{ site_title|default:"Django site admin" }}{% endblock %}
+
+{% block content %}
+  <h1>{{ title }}</h1>
+
+  <div class="module">
+    <form method="post">
+      {% csrf_token %}
+      <fieldset class="module aligned">
+        {{ form.as_p }}
+      </fieldset>
+
+      <div class="submit-row">
+        <input type="submit" value="Поставить в очередь Celery" class="default" />
+        <a class="button" href="{% url 'admin:agromash_telegramreportsubscription_changelist' %}">Назад</a>
+      </div>
+    </form>
+  </div>
+
+  <p class="help">Отчёт формируется асинхронно в Celery (чтобы не блокировать админку). Статус смотрите в разделе System Status.</p>
+{% endblock %}
+

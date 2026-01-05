@@ -162,10 +162,10 @@ def _collect_system_status_context() -> dict:
 
     # Последние события Telegram / отчёты
     telegram_logs = list(
-        TelegramEventLog.objects.select_related("subscriber", "alarm").all()[:50]
+        TelegramEventLog.objects.select_related("subscriber", "alarm").all()[:100]
     )
     report_logs = list(
-        ReportRunLog.objects.select_related("subscriber", "subscription").all()[:50]
+        ReportRunLog.objects.select_related("subscriber", "subscription").all()[:100]
     )
 
     return {

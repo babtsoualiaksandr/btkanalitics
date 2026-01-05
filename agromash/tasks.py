@@ -1,5 +1,6 @@
 import logging
 import time
+import datetime
 from typing import Optional
 
 from celery import shared_task
@@ -12,11 +13,174 @@ from django.utils import timezone
 from agromash.models import AccountVideoAnalytics, ReportRunLog, TelegramReportSubscription
 from agromash.services.parse_event_runner import ParserRunContext, run_parse_event
 from agromash.services.report_scheduler import compute_next_run_at
-from agromash.services.reporting import generate_report_attachments
+from agromash.services.reporting import generate_report_attachments, generate_report_attachments_for_range
 from agromash.services.telegram_client import send_document, send_message
 
 
 logger = logging.getLogger(__name__)
+
+
+@shared_task(bind=True, name="agromash.send_report_now")
+def send_report_now(self, subscription_id: int, source: str = "admin") -> None:
+    """Сформировать и отправить отчёт по конкретной подписке (ручной запуск).
+
+    Делается в Celery, чтобы не блокировать HTTP (админку).
+    """
+
+    now = timezone.now()
+    t0 = time.monotonic()
+
+    sub = (
+        TelegramReportSubscription.objects.select_related("subscriber")
+        .prefetch_related("monitors")
+        .filter(pk=subscription_id)
+        .first()
+    )
+    if not sub or not sub.subscriber_id or not getattr(sub.subscriber, "chat_id", None):
+        logger.warning("send_report_now: invalid subscription_id=%s", subscription_id)
+        return
+
+    run_log = ReportRunLog.objects.create(
+        subscription=sub,
+        subscriber=sub.subscriber,
+        started_at=now,
+    )
+
+    try:
+        caption, attachments, rows_count = generate_report_attachments(sub=sub, now=now)
+        meta = {
+            "source": source,
+            "subscription_id": sub.id,
+            "task_id": getattr(getattr(self, "request", None), "id", None),
+        }
+
+        if not attachments:
+            send_message(chat_id=sub.subscriber.chat_id, text=caption, meta=meta)
+        else:
+            for idx, (filename, content, mime_type) in enumerate(attachments):
+                send_document(
+                    chat_id=sub.subscriber.chat_id,
+                    filename=filename,
+                    content=content,
+                    mime_type=mime_type,
+                    caption=caption if idx == 0 else None,
+                    meta=meta,
+                )
+
+        sub.last_sent_at = now
+        sub.next_run_at = compute_next_run_at(now=now, frequency=sub.frequency)
+        sub.save(update_fields=["last_sent_at", "next_run_at", "updated_at"])
+
+        run_log.finished_at = timezone.now()
+        run_log.duration_ms = int((time.monotonic() - t0) * 1000)
+        run_log.ok = True
+        run_log.error = ""
+        run_log.alarms_count = int(rows_count or 0)
+        run_log.attachments_count = len(attachments or [])
+        run_log.save(
+            update_fields=[
+                "finished_at",
+                "duration_ms",
+                "ok",
+                "error",
+                "alarms_count",
+                "attachments_count",
+            ]
+        )
+    except Exception:
+        logger.exception("send_report_now failed (subscription_id=%s)", sub.id)
+        run_log.finished_at = timezone.now()
+        run_log.duration_ms = int((time.monotonic() - t0) * 1000)
+        run_log.ok = False
+        run_log.error = "exception"
+        run_log.save(update_fields=["finished_at", "duration_ms", "ok", "error"])
+
+
+@shared_task(bind=True, name="agromash.send_report_range_now")
+def send_report_range_now(
+    self,
+    subscription_id: int,
+    start_iso: str,
+    end_iso: str,
+    source: str = "admin",
+) -> None:
+    """Сформировать и отправить отчёт по подписке за указанный диапазон start..end (ISO)."""
+
+    sub = (
+        TelegramReportSubscription.objects.select_related("subscriber")
+        .prefetch_related("monitors")
+        .filter(pk=subscription_id)
+        .first()
+    )
+    if not sub or not sub.subscriber_id or not getattr(sub.subscriber, "chat_id", None):
+        logger.warning("send_report_range_now: invalid subscription_id=%s", subscription_id)
+        return
+
+    try:
+        start = datetime.datetime.fromisoformat(start_iso)
+        end = datetime.datetime.fromisoformat(end_iso)
+    except Exception:
+        logger.exception("send_report_range_now: invalid datetime input")
+        return
+
+    now = timezone.now()
+    t0 = time.monotonic()
+    run_log = ReportRunLog.objects.create(
+        subscription=sub,
+        subscriber=sub.subscriber,
+        started_at=now,
+    )
+
+    try:
+        caption, attachments, rows_count = generate_report_attachments_for_range(
+            sub=sub,
+            start=start,
+            end=end,
+            now=now,
+        )
+        meta = {
+            "source": source,
+            "subscription_id": sub.id,
+            "task_id": getattr(getattr(self, "request", None), "id", None),
+            "range": f"{start_iso}..{end_iso}",
+        }
+
+        if not attachments:
+            send_message(chat_id=sub.subscriber.chat_id, text=caption, meta=meta)
+        else:
+            for idx, (filename, content, mime_type) in enumerate(attachments):
+                send_document(
+                    chat_id=sub.subscriber.chat_id,
+                    filename=filename,
+                    content=content,
+                    mime_type=mime_type,
+                    caption=caption if idx == 0 else None,
+                    meta=meta,
+                )
+
+        run_log.finished_at = timezone.now()
+        run_log.duration_ms = int((time.monotonic() - t0) * 1000)
+        run_log.ok = True
+        run_log.error = ""
+        run_log.alarms_count = int(rows_count or 0)
+        run_log.attachments_count = len(attachments or [])
+        run_log.save(
+            update_fields=[
+                "finished_at",
+                "duration_ms",
+                "ok",
+                "error",
+                "alarms_count",
+                "attachments_count",
+            ]
+        )
+    except Exception:
+        logger.exception("send_report_range_now failed (subscription_id=%s)", sub.id)
+        run_log.finished_at = timezone.now()
+        run_log.duration_ms = int((time.monotonic() - t0) * 1000)
+        run_log.ok = False
+        run_log.error = "exception"
+        run_log.save(update_fields=["finished_at", "duration_ms", "ok", "error"])
 
 
 @shared_task(bind=True, name="agromash.parse_event")

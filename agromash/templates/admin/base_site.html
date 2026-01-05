@@ -12,22 +12,115 @@
   {{ block.super }}
   <link rel="icon" type="image/svg+xml" href="{% static 'agromash/favicon.svg' %}">
   <style>
+    /* ---- BTK (purple) theme overrides for Django admin ---- */
+    :root {
+      --primary: #6a1b9a;         /* main purple */
+      --secondary: #8e24aa;       /* accent purple */
+      --accent: #f3e5f5;          /* very light purple */
+      --header-bg: #4a148c;       /* deep purple */
+      --header-color: #ffffff;
+      --link-fg: #6a1b9a;
+      --link-hover-color: #4a148c;
+      --button-bg: #6a1b9a;
+      --button-hover-bg: #4a148c;
+      --button-fg: #ffffff;
+    }
+
+    /* Header */
+    #header { background: var(--header-bg); color: var(--header-color); }
+    #header a:link, #header a:visited { color: var(--header-color); }
+    #user-tools a { color: var(--header-color) !important; }
+
+    /* Links (must not override button links) */
+    a:link, a:visited {
+      color: var(--link-fg);
+      text-decoration: none;
+    }
+    a:hover, a:focus {
+      color: var(--link-hover-color);
+      text-decoration: underline;
+    }
+
+    /* Buttons */
+    .button,
+    input[type=submit],
+    input[type=button],
+    .submit-row input,
+    a.button,
+    a.button:link,
+    a.button:visited {
+      background: var(--button-bg);
+      border-color: transparent;
+      color: var(--button-fg);
+    }
+    .button:hover,
+    input[type=submit]:hover,
+    input[type=button]:hover,
+    .submit-row input:hover,
+    a.button:hover,
+    a.button:focus {
+      background: var(--button-hover-bg);
+      color: var(--button-fg);
+    }
+
+    /* Extra safety: global link rules should never recolor admin buttons */
+    a.button,
+    a.button:link,
+    a.button:visited,
+    a.button:hover,
+    a.button:focus {
+      color: var(--button-fg) !important;
+      text-decoration: none;
+    }
+
+    /* Changelist: make action buttons compact & prevent ugly wraps/underlines */
+    #result_list a.button,
+    #result_list button.button {
+      padding: 6px 10px;
+      font-size: 12px;
+      line-height: 1.1;
+      white-space: nowrap;
+      text-decoration: none !important;
+    }
+    #result_list form {
+      margin: 0;
+    }
+
+    /* Module captions */
+    .module caption, .inline-group h2 {
+      background: var(--primary);
+      color: #fff;
+    }
+
     .agromash-admin-toplink {
       display: inline-block;
       margin-left: 12px;
       padding: 6px 10px;
       border-radius: 6px;
-      background: #0b5fff;
+      background: var(--secondary);
       color: #fff;
       text-decoration: none;
       font-weight: 600;
       line-height: 1;
     }
     .agromash-admin-toplink:hover { filter: brightness(0.95); }
+
+    .agromash-admin-logo {
+      height: 32px;
+      width: auto;
+      vertical-align: middle;
+      margin-right: 10px;
+      background: rgba(255,255,255,0.95);
+      border-radius: 6px;
+      padding: 2px 6px;
+    }
   </style>
 {% endblock %}
 
 {% block branding %}
+  <a href="{% url 'admin:index' %}" aria-label="BTK Analitics admin" style="text-decoration:none;">
+    <img class="agromash-admin-logo" src="{% static 'agromash/btk-logo.svg' %}" alt="BTK" />
+  </a>
   {{ block.super }}
   <a class="agromash-admin-toplink" href="{% url 'admin_system_status' %}">System Status</a>
 {% endblock %}

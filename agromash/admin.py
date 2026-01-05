@@ -1,7 +1,6 @@
 from django.contrib import admin, messages
 from django import forms
 import logging
-import time
 from django.contrib.auth import password_validation
 from django.contrib.auth.admin import UserAdmin as DjangoUserAdmin
 from django.contrib.auth.forms import UserChangeForm as DjangoUserChangeForm
@@ -16,20 +15,18 @@ from django.http import HttpResponseNotAllowed
 from django.middleware.csrf import get_token
 from django.shortcuts import redirect
 from django.urls import path, reverse
+from django.template.response import TemplateResponse
 from .models import (
     AccountVideoAnalytics,
     Alarm,
     Monitor,
-    ReportRunLog,
     TelegramReportSubscription,
     TelegramSubscriber,
     TelegramSubscriberMonitorSubscription,
 )
 
 from .tasks import parse_event_task, request_stop_parser
-from .services.report_scheduler import compute_next_run_at
-from .services.reporting import generate_report_attachments
-from .services.telegram_client import send_document, send_message
+from .tasks import send_report_now, send_report_range_now
 
 # -----------------
 # Django admin: название во вкладке браузера / заголовки
@@ -490,8 +487,12 @@ class TelegramReportSubscriptionAdmin(admin.ModelAdmin):
         def send_now_controls(obj: TelegramReportSubscription):
             return self._send_now_controls(request, obj)
 
+        def send_range_controls(obj: TelegramReportSubscription):
+            return self._send_range_controls(request, obj)
+
         send_now_controls.short_description = "Отчёт"
-        return (*base, send_now_controls)
+        send_range_controls.short_description = "Диапазон"
+        return (*base, send_now_controls, send_range_controls)
 
     def get_urls(self):
         urls = super().get_urls()
@@ -500,6 +501,11 @@ class TelegramReportSubscriptionAdmin(admin.ModelAdmin):
                 '<path:object_id>/send-now/',
                 self.admin_site.admin_view(self.send_now_view),
                 name='agromash_telegramreportsubscription_send_now',
+            ),
+            path(
+                '<path:object_id>/send-range/',
+                self.admin_site.admin_view(self.send_range_view),
+                name='agromash_telegramreportsubscription_send_range',
             ),
         ]
         return custom_urls + urls
@@ -522,6 +528,13 @@ class TelegramReportSubscriptionAdmin(admin.ModelAdmin):
             title,
         )
 
+    def _send_range_controls(self, request, obj: TelegramReportSubscription):
+        send_range_url = reverse('admin:agromash_telegramreportsubscription_send_range', args=[obj.pk])
+        return format_html(
+            '<a class="button" href="{}">Выбрать период…</a>',
+            send_range_url,
+        )
+
     def send_now_view(self, request, object_id):
         if request.method != 'POST':
             return HttpResponseNotAllowed(['POST'])
@@ -534,60 +547,112 @@ class TelegramReportSubscriptionAdmin(admin.ModelAdmin):
             self.message_user(request, 'У подписчика не задан chat_id — отправка невозможна', level=messages.ERROR)
             return redirect(request.META.get('HTTP_REFERER') or reverse('admin:agromash_telegramreportsubscription_changelist'))
 
-        now = timezone.now()
-        t0 = time.monotonic()
-        run_log = ReportRunLog.objects.create(subscription=sub, subscriber=sub.subscriber, started_at=now)
-
         try:
-            caption, attachments, rows_count = generate_report_attachments(sub=sub, now=now)
-            if not attachments:
-                send_message(chat_id=sub.subscriber.chat_id, text=caption, meta={"source": "admin", "subscription_id": sub.id})
-            else:
-                for idx, (filename, content, mime_type) in enumerate(attachments):
-                    send_document(
-                        chat_id=sub.subscriber.chat_id,
-                        filename=filename,
-                        content=content,
-                        mime_type=mime_type,
-                        caption=caption if idx == 0 else None,
-                        meta={"source": "admin", "subscription_id": sub.id},
-                    )
-
-            sub.last_sent_at = now
-            sub.next_run_at = compute_next_run_at(now=now, frequency=sub.frequency)
-            sub.save(update_fields=["last_sent_at", "next_run_at", "updated_at"])
-
-            run_log.finished_at = timezone.now()
-            run_log.duration_ms = int((time.monotonic() - t0) * 1000)
-            run_log.ok = True
-            run_log.error = ""
-            run_log.alarms_count = int(rows_count or 0)
-            run_log.attachments_count = len(attachments or [])
-            run_log.save(
-                update_fields=[
-                    "finished_at",
-                    "duration_ms",
-                    "ok",
-                    "error",
-                    "alarms_count",
-                    "attachments_count",
-                ]
-            )
-
+            async_res = send_report_now.delay(sub.id, source="admin")
             self.message_user(
                 request,
-                f"Отчёт отправлен (subscription_id={sub.id}, rows={rows_count}, files={len(attachments)})",
+                f"Отправка отчёта поставлена в очередь Celery (subscription_id={sub.id}, task_id={async_res.id})",
                 level=messages.SUCCESS,
             )
         except Exception:
-            run_log.finished_at = timezone.now()
-            run_log.duration_ms = int((time.monotonic() - t0) * 1000)
-            run_log.ok = False
-            run_log.error = "exception"
-            run_log.save(update_fields=["finished_at", "duration_ms", "ok", "error"])
-
-            logger = logging.getLogger(__name__)
-            logger.exception("Ошибка ручной отправки отчёта (subscription_id=%s)", sub.id)
-            self.message_user(request, "Ошибка отправки отчёта — см. логи", level=messages.ERROR)
+            logging.getLogger(__name__).exception("Ошибка постановки отчёта в очередь (subscription_id=%s)", sub.id)
+            self.message_user(request, "Не удалось поставить задачу в очередь Celery — см. логи", level=messages.ERROR)
 
         return redirect(request.META.get('HTTP_REFERER') or reverse('admin:agromash_telegramreportsubscription_changelist'))
+
+
+class _ReportRangeForm(forms.Form):
+    start = forms.DateTimeField(
+        label="Начало периода",
+        required=True,
+        input_formats=["%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"],
+        widget=forms.DateTimeInput(attrs={"type": "datetime-local"}),
+    )
+    end = forms.DateTimeField(
+        label="Конец периода",
+        required=True,
+        input_formats=["%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"],
+        widget=forms.DateTimeInput(attrs={"type": "datetime-local"}),
+    )
+
+
+def _dt_to_local_input(dt: timezone.datetime) -> str:
+    dt_local = timezone.localtime(dt)
+    return dt_local.strftime("%Y-%m-%dT%H:%M")
+
+
+def _get_default_range_initial() -> dict:
+    now = timezone.now()
+    start = now - timezone.timedelta(hours=24)
+    return {
+        "start": _dt_to_local_input(start),
+        "end": _dt_to_local_input(now),
+    }
+
+
+def _render_admin_form(request, *, title: str, form: forms.Form, object_id: str):
+    context = admin.site.each_context(request)
+    context.update(
+        {
+            "title": title,
+            "form": form,
+            "object_id": object_id,
+        }
+    )
+    return TemplateResponse(request, "admin/agromash/telegramreportsubscription/send_range.html", context)
+
+
+def _redirect_back(request):
+    return redirect(request.META.get('HTTP_REFERER') or reverse('admin:agromash_telegramreportsubscription_changelist'))
+
+
+def _subscription_for_admin(admin_obj: TelegramReportSubscriptionAdmin, request, object_id):
+    sub = admin_obj.get_object(request, object_id)
+    if sub is None:
+        raise Http404('TelegramReportSubscription not found')
+    return sub
+
+
+def _enqueue_range_task(sub: TelegramReportSubscription, start_dt, end_dt):
+    # В Celery отправляем ISO; dt -> локальная ISO (без TZ) тоже норм,
+    # в задаче будет make_aware.
+    return send_report_range_now.delay(sub.id, start_dt.isoformat(), end_dt.isoformat(), source="admin")
+
+
+def send_range_view(self: TelegramReportSubscriptionAdmin, request, object_id):
+    """Показать форму выбора диапазона и поставить задачу отчёта в очередь."""
+
+    sub = _subscription_for_admin(self, request, object_id)
+    if not sub.subscriber_id or not getattr(sub.subscriber, 'chat_id', None):
+        self.message_user(request, 'У подписчика не задан chat_id — отправка невозможна', level=messages.ERROR)
+        return _redirect_back(request)
+
+    if request.method == "GET":
+        form = _ReportRangeForm(initial=_get_default_range_initial())
+        return _render_admin_form(request, title=f"Отчёт по диапазону (id={sub.id})", form=form, object_id=object_id)
+
+    if request.method != "POST":
+        return HttpResponseNotAllowed(['GET', 'POST'])
+
+    form = _ReportRangeForm(request.POST)
+    if not form.is_valid():
+        return _render_admin_form(request, title=f"Отчёт по диапазону (id={sub.id})", form=form, object_id=object_id)
+
+    start_dt = form.cleaned_data["start"]
+    end_dt = form.cleaned_data["end"]
+    try:
+        async_res = _enqueue_range_task(sub, start_dt, end_dt)
+        self.message_user(
+            request,
+            f"Отчёт по диапазону поставлен в очередь Celery (subscription_id={sub.id}, task_id={async_res.id})",
+            level=messages.SUCCESS,
+        )
+    except Exception:
+        logging.getLogger(__name__).exception("Ошибка постановки range-отчёта в очередь (subscription_id=%s)", sub.id)
+        self.message_user(request, "Не удалось поставить задачу в очередь Celery — см. логи", level=messages.ERROR)
+
+    return _redirect_back(request)
+
+
+# bind method to admin class (чтобы не раздувать класс ниже)
+TelegramReportSubscriptionAdmin.send_range_view = send_range_view

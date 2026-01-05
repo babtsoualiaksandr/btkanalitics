@@ -33,6 +33,13 @@ def _now_epoch_ms(now: datetime.datetime) -> int:
     return int(now.timestamp() * 1000)
 
 
+def _dt_to_epoch_ms(dt: datetime.datetime) -> int:
+    """aware datetime -> epoch ms."""
+    if timezone.is_naive(dt):
+        dt = timezone.make_aware(dt, timezone.get_current_timezone())
+    return int(dt.timestamp() * 1000)
+
+
 def _monitor_ids_int(monitors: Iterable[Monitor]) -> List[int]:
     out: List[int] = []
     for m in monitors:
@@ -63,6 +70,29 @@ def get_alarms_for_subscription(
     qs = Alarm.objects.filter(start_time__gte=from_ms, start_time__lte=to_ms)
 
     # Фильтр по мониторам (если выбраны)
+    monitors = list(sub.monitors.all())
+    monitor_ids = _monitor_ids_int(monitors)
+    if monitor_ids:
+        qs = qs.filter(monitor_id__in=monitor_ids)
+
+    return qs.order_by("start_time")
+
+
+def get_alarms_for_subscription_range(
+    *,
+    sub: TelegramReportSubscription,
+    start: datetime.datetime,
+    end: datetime.datetime,
+) -> QuerySet[Alarm]:
+    """QuerySet Alarm для отчёта по заданному диапазону дат/времени."""
+
+    start_ms = _dt_to_epoch_ms(start)
+    end_ms = _dt_to_epoch_ms(end)
+    if start_ms > end_ms:
+        start_ms, end_ms = end_ms, start_ms
+
+    qs = Alarm.objects.filter(start_time__gte=start_ms, start_time__lte=end_ms)
+
     monitors = list(sub.monitors.all())
     monitor_ids = _monitor_ids_int(monitors)
     if monitor_ids:
@@ -421,6 +451,65 @@ def generate_report_attachments(
 
     attachments: List[Tuple[str, bytes, str]] = []
 
+    stamp = now.strftime("%Y%m%d_%H%M%S")
+    base = f"alarms_report_{stamp}"
+    title = f"Alarms report ({stamp})"
+
+    if sub.send_xlsx:
+        xlsx = generate_xlsx(rows=rows)
+        if xlsx:
+            attachments.append((f"{base}.xlsx", xlsx, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+
+    if sub.send_pdf:
+        pdf = generate_pdf(rows=rows, title=title)
+        if pdf:
+            attachments.append((f"{base}.pdf", pdf, "application/pdf"))
+
+    return caption, attachments, len(rows)
+
+
+def generate_report_attachments_for_range(
+    *,
+    sub: TelegramReportSubscription,
+    start: datetime.datetime,
+    end: datetime.datetime,
+    now: Optional[datetime.datetime] = None,
+) -> Tuple[str, List[Tuple[str, bytes, str]], int]:
+    """Сформировать файлы отчёта по заданному диапазону дат/времени."""
+
+    now = now or timezone.now()
+    alarms_qs = get_alarms_for_subscription_range(sub=sub, start=start, end=end)
+    alarms = list(alarms_qs.select_related("account"))
+    rows = build_report_rows(alarms)
+
+    # Добавляем ссылки и превью snapshot (best-effort)
+    client_cache: Dict[int, VAApiClient] = {}
+    max_images = 50
+    img_count = 0
+    for r, a in zip(rows, alarms):
+        snap = getattr(a, "original_quality_snapshot", None)
+        if snap:
+            r["snapshot_url"] = _build_absolute_url(str(snap))
+        if snap and img_count < max_images:
+            b = _fetch_snapshot_bytes(alarm=a, client_cache=client_cache)
+            if b:
+                r["snapshot_bytes"] = b
+                img_count += 1
+
+    # диапазон отображаем в локальном времени
+    if timezone.is_naive(start):
+        start = timezone.make_aware(start, timezone.get_current_timezone())
+    if timezone.is_naive(end):
+        end = timezone.make_aware(end, timezone.get_current_timezone())
+    start_local = timezone.localtime(start)
+    end_local = timezone.localtime(end)
+
+    caption = (
+        f"Отчёт по тревогам: {len(rows)} записей\n"
+        f"range={start_local.strftime('%Y-%m-%d %H:%M')}..{end_local.strftime('%Y-%m-%d %H:%M')}"
+    )
+
+    attachments: List[Tuple[str, bytes, str]] = []
     stamp = now.strftime("%Y%m%d_%H%M%S")
     base = f"alarms_report_{stamp}"
     title = f"Alarms report ({stamp})"

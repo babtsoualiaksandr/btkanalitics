@@ -15,6 +15,7 @@
     .stale { background: #7a5b1f; }
     .unknown { background: #444; }
     .logbox { max-height: 320px; overflow: auto; }
+    .tablebox { max-height: 340px; overflow: auto; border: 1px solid #ddd; border-radius: 8px; }
     .muted { color: #666; font-size: 12px; }
   </style>
 </head>
@@ -115,76 +116,82 @@
   {% endfor %}
 
   <h2>Telegram: последние отправки</h2>
-  <table>
-    <thead>
-      <tr>
-        <th>Время</th>
-        <th>chat_id</th>
-        <th>Подписчик</th>
-        <th>kind</th>
-        <th>ok</th>
-        <th>status</th>
-        <th>alarm</th>
-        <th>text/filename</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for e in telegram_logs %}
+  <div class="muted">Показано 100 записей, видимая область ~10 строк (можно прокручивать).</div>
+  <div class="tablebox">
+    <table>
+      <thead>
         <tr>
-          <td>{{ e.created_at|date:"Y-m-d H:i:s" }}</td>
-          <td><code>{{ e.chat_id }}</code></td>
-          <td>
-            {% if e.subscriber %}
-              {{ e.subscriber.username }} ({{ e.subscriber.id }})
-            {% else %}
-              -
-            {% endif %}
-          </td>
-          <td>{{ e.kind }}</td>
-          <td>{{ e.ok }}</td>
-          <td>{{ e.status_code|default:"-" }}</td>
-          <td>{% if e.alarm %}{{ e.alarm.alarm_id }}{% else %}-{% endif %}</td>
-          <td>
-            {% if e.filename %}<code>{{ e.filename }}</code>{% endif %}
-            {% if e.text %}<div class="muted">{{ e.text|truncatechars:200 }}</div>{% endif %}
-          </td>
+          <th>Время</th>
+          <th>chat_id</th>
+          <th>Подписчик</th>
+          <th>kind</th>
+          <th>ok</th>
+          <th>status</th>
+          <th>alarm</th>
+          <th>text/filename</th>
         </tr>
-      {% empty %}
-        <tr><td colspan="8">Пока нет записей</td></tr>
-      {% endfor %}
-    </tbody>
-  </table>
+      </thead>
+      <tbody>
+        {% for e in telegram_logs %}
+          <tr>
+            <td>{{ e.created_at|date:"Y-m-d H:i:s" }}</td>
+            <td><code>{{ e.chat_id }}</code></td>
+            <td>
+              {% if e.subscriber %}
+                {{ e.subscriber.username }} ({{ e.subscriber.id }})
+              {% else %}
+                -
+              {% endif %}
+            </td>
+            <td>{{ e.kind }}</td>
+            <td>{{ e.ok }}</td>
+            <td>{{ e.status_code|default:"-" }}</td>
+            <td>{% if e.alarm %}{{ e.alarm.alarm_id }}{% else %}-{% endif %}</td>
+            <td>
+              {% if e.filename %}<code>{{ e.filename }}</code>{% endif %}
+              {% if e.text %}<div class="muted">{{ e.text|truncatechars:200 }}</div>{% endif %}
+            </td>
+          </tr>
+        {% empty %}
+          <tr><td colspan="8">Пока нет записей</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
 
   <h2>Отчёты: последние генерации</h2>
-  <table>
-    <thead>
-      <tr>
-        <th>Время</th>
-        <th>subscription</th>
-        <th>subscriber</th>
-        <th>ok</th>
-        <th>alarms</th>
-        <th>attachments</th>
-        <th>duration_ms</th>
-        <th>error</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for r in report_logs %}
+  <div class="muted">Показано 100 записей, видимая область ~10 строк (можно прокручивать).</div>
+  <div class="tablebox">
+    <table>
+      <thead>
         <tr>
-          <td>{{ r.created_at|date:"Y-m-d H:i:s" }}</td>
-          <td>{% if r.subscription %}{{ r.subscription.id }}{% else %}-{% endif %}</td>
-          <td>{% if r.subscriber %}{{ r.subscriber.username }} ({{ r.subscriber.id }}){% else %}-{% endif %}</td>
-          <td>{{ r.ok }}</td>
-          <td>{{ r.alarms_count }}</td>
-          <td>{{ r.attachments_count }}</td>
-          <td>{{ r.duration_ms|default:"-" }}</td>
-          <td class="muted">{{ r.error|default:"" }}</td>
+          <th>Время</th>
+          <th>subscription</th>
+          <th>subscriber</th>
+          <th>ok</th>
+          <th>alarms</th>
+          <th>attachments</th>
+          <th>duration_ms</th>
+          <th>error</th>
         </tr>
-      {% empty %}
-        <tr><td colspan="8">Пока нет записей</td></tr>
-      {% endfor %}
-    </tbody>
-  </table>
+      </thead>
+      <tbody>
+        {% for r in report_logs %}
+          <tr>
+            <td>{{ r.created_at|date:"Y-m-d H:i:s" }}</td>
+            <td>{% if r.subscription %}{{ r.subscription.id }}{% else %}-{% endif %}</td>
+            <td>{% if r.subscriber %}{{ r.subscriber.username }} ({{ r.subscriber.id }}){% else %}-{% endif %}</td>
+            <td>{{ r.ok }}</td>
+            <td>{{ r.alarms_count }}</td>
+            <td>{{ r.attachments_count }}</td>
+            <td>{{ r.duration_ms|default:"-" }}</td>
+            <td class="muted">{{ r.error|default:"" }}</td>
+          </tr>
+        {% empty %}
+          <tr><td colspan="8">Пока нет записей</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
 </body>
 </html>
