@@ -1,9 +1,12 @@
+import datetime
+
 from django.test import TestCase
 from django.utils import timezone
 from django.urls import reverse
 from django.test import override_settings
 from django.core import mail
 from unittest.mock import Mock, patch
+from django.contrib.auth.models import User
 
 from agromash.models import AccountVideoAnalytics, Alarm, Monitor, TelegramReportSubscription, TelegramSubscriber
 from agromash.services.alarm_data_parser import format_alarm_caption, parse_alarm_data
@@ -11,6 +14,8 @@ from agromash.services.report_scheduler import compute_next_run_at
 from agromash.services.reporting import get_alarms_for_subscription
 from agromash.va_api_client import VAApiClient
 from agromash.tasks import send_email_report_now
+from agromash.services.fuel_report_importer import import_fuel_report_from_xlsx
+from agromash.models import FuelReport, FuelOperation
 
 
 class _FakeResponse:
@@ -323,3 +328,115 @@ class EmailReportTest(TestCase):
         self.assertEqual(msg.to, ["to@example.test"])
         self.assertIn("caption", msg.body)
         self.assertEqual(len(msg.attachments), 1)
+
+
+class FuelReportImportTest(TestCase):
+    def test_import_fuel_report_from_xlsx_skips_totals_and_propagates_card(self):
+        try:
+            import openpyxl
+        except Exception:
+            self.skipTest("openpyxl is not installed")
+
+        from io import BytesIO
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+
+        # meta header
+        ws.append(["Пооперационный_отчёт_01.12.2025_31.12.2025"])
+        ws.append(["По договору № 4117"])
+        ws.append(["Наименование организации: Test Org"])
+        ws.append([])
+
+        # real header row
+        header = [
+            "Номер топливной карты",
+            "Номер подразделения",
+            "Дата и время отпуска",
+            "Наименование товара/услуги",
+            "Код товара/услуги",
+            "Количество",
+            "Единица измерения",
+            "Цена единицы с НДС со скидкой, руб. коп.",
+            "Стоимость с НДС со скидкой, руб. коп.",
+            "НДС, руб. коп.",
+            "Скидка с НДС, руб. коп.",
+            "% за услуги",
+            "Стоимость услуг с НДС, руб. коп.",
+            "Стоимость всего с НДС, руб. коп.",
+            "Сумма НДС всего, руб. коп.",
+            "Владелец точки обслуживания",
+            "Номер точки обслуживания",
+            "Номер ТРК/номер секции",
+            "Фио водителя",
+            "Номер транспортного средства",
+        ]
+        ws.append(header)
+
+        # row with card
+        ws.append([
+            "802003108",
+            "3",
+            "2025-12-02 11:58:08",
+            "Газ",
+            "16",
+            31.33,
+            "л.",
+            1.32,
+            41.36,
+            6.89,
+            0,
+            0,
+            0,
+            41.36,
+            6.89,
+            "МогилевОНП",
+            "64",
+            "5",
+            "",
+            "",
+        ])
+        # row without card => should propagate 802003108
+        ws.append([
+            "",
+            "3",
+            "2025-12-08 07:55:54",
+            "АИ-95-Евро",
+            "3",
+            20,
+            "л.",
+            2.6,
+            52,
+            8.67,
+            0,
+            0,
+            0,
+            52,
+            8.67,
+            "МогилевОНП",
+            "22",
+            "4",
+            "",
+            "",
+        ])
+        # totals row => should be skipped
+        ws.append(["Итого по 802003108"])
+
+        bio = BytesIO()
+        wb.save(bio)
+        bio.seek(0)
+
+        u = User.objects.create_user(username="u")
+        res = import_fuel_report_from_xlsx(
+            file_obj=bio,
+            filename="test.xlsx",
+            imported_by=u,
+            period_start=datetime.date(2025, 12, 1),
+            period_end=datetime.date(2025, 12, 31),
+        )
+        self.assertEqual(res.created_rows, 2)
+        self.assertEqual(FuelReport.objects.count(), 1)
+        self.assertEqual(FuelOperation.objects.count(), 2)
+
+        op2 = FuelOperation.objects.order_by('operation_at').last()
+        self.assertEqual(op2.card_number, "802003108")

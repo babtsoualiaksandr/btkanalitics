@@ -1,0 +1,11 @@
+{% extends "admin/change_list.html" %}
+
+{% block object-tools-items %}
+  <li>
+    <a href="{% url 'admin:agromash_fuelreport_import_xlsx' %}" class="addlink">
+      Импорт XLSX
+    </a>
+  </li>
+  {{ block.super }}
+{% endblock %}
+

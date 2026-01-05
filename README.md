@@ -32,3 +32,13 @@ EMAIL_HOST_PASSWORD='xxxx xxxx xxxx xxxx'  # Gmail App Password
 EMAIL_USE_TLS=True
 DEFAULT_FROM_EMAIL='BTK Reports <your@gmail.com>'
 ```
+
+## Импорт пооперационных XLSX отчётов
+
+Импорт выполняется через Django admin в модели [`FuelReport`](agromash/models.py:288) (кнопка «Импорт XLSX»).
+
+Для импорта требуется библиотека `openpyxl`:
+
+```bash
+pip install openpyxl
+```

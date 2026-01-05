@@ -18,7 +18,10 @@ from django.template.response import TemplateResponse
 from .models import (
     AccountVideoAnalytics,
     Alarm,
+    FuelOperation,
+    FuelReport,
     Monitor,
+    PlateIdentity,
     TelegramReportSubscription,
     TelegramSubscriber,
     TelegramSubscriberMonitorSubscription,
@@ -27,8 +30,16 @@ from .models import (
 from .tasks import parse_event_task, request_stop_parser
 from .tasks import send_report_now, send_report_range_now, send_email_report_now
 
+from agromash.services.fuel_report_importer import FuelImportError, import_fuel_report_from_xlsx
+
 
 logger = logging.getLogger(__name__)
+
+
+class FuelReportImportForm(forms.Form):
+    xlsx_file = forms.FileField(label="XLSX файл", required=True)
+    period_start = forms.DateField(label="Период с", required=False)
+    period_end = forms.DateField(label="Период по", required=False)
 
 # -----------------
 # Django admin: название во вкладке браузера / заголовки
@@ -431,6 +442,42 @@ class AlarmAdmin(admin.ModelAdmin):
     snapshot_preview.short_description = "Snapshot"
 
 
+@admin.register(PlateIdentity)
+class PlateIdentityAdmin(admin.ModelAdmin):
+    list_display = (
+        "number",
+        "state",
+        "list_name",
+        "list_level",
+        "owner_last_name",
+        "owner_first_name",
+        "owner_middle_name",
+        "plate_external_id",
+        "updated_at",
+        "last_alarm",
+    )
+    search_fields = (
+        "number",
+        "state",
+        "list_name",
+        "owner_last_name",
+        "owner_first_name",
+        "owner_middle_name",
+    )
+    list_filter = (
+        "state",
+        "list_level",
+    )
+    ordering = ("number",)
+    readonly_fields = (
+        "created_at",
+        "updated_at",
+    )
+    autocomplete_fields = (
+        "last_alarm",
+    )
+
+
 class TelegramSubscriberMonitorSubscriptionInline(admin.TabularInline):
     model = TelegramSubscriberMonitorSubscription
     extra = 0
@@ -794,3 +841,104 @@ def send_range_view(self: TelegramReportSubscriptionAdmin, request, object_id):
 
 # bind method to admin class (чтобы не раздувать класс ниже)
 TelegramReportSubscriptionAdmin.send_range_view = send_range_view
+
+
+@admin.register(FuelReport)
+class FuelReportAdmin(admin.ModelAdmin):
+    change_list_template = "admin/agromash/fuelreport/change_list.html"
+
+    list_display = (
+        "id",
+        "created_at",
+        "contract_number",
+        "organization_name",
+        "period_start",
+        "period_end",
+        "rows_count",
+        "imported_ok",
+    )
+    list_filter = ("imported_ok", "period_start", "period_end")
+    search_fields = ("contract_number", "organization_name", "source_filename", "source_sha256")
+    readonly_fields = ("created_at", "rows_count", "imported_ok", "import_error", "source_sha256")
+
+    def get_urls(self):
+        urls = super().get_urls()
+        custom = [
+            path(
+                "import-xlsx/",
+                self.admin_site.admin_view(self.import_xlsx_view),
+                name="agromash_fuelreport_import_xlsx",
+            ),
+        ]
+        return custom + urls
+
+    def import_xlsx_view(self, request):
+        if request.method == "GET":
+            form = FuelReportImportForm()
+            ctx = admin.site.each_context(request)
+            ctx.update({"title": "Импорт пооперационного отчёта (XLSX)", "form": form})
+            return TemplateResponse(request, "admin/agromash/fuelreport/import_xlsx.html", ctx)
+
+        if request.method != "POST":
+            return HttpResponseNotAllowed(["GET", "POST"])
+
+        form = FuelReportImportForm(request.POST, request.FILES)
+        if not form.is_valid():
+            ctx = admin.site.each_context(request)
+            ctx.update({"title": "Импорт пооперационного отчёта (XLSX)", "form": form})
+            return TemplateResponse(request, "admin/agromash/fuelreport/import_xlsx.html", ctx)
+
+        f = form.cleaned_data["xlsx_file"]
+        p_start = form.cleaned_data.get("period_start")
+        p_end = form.cleaned_data.get("period_end")
+
+        try:
+            res = import_fuel_report_from_xlsx(
+                file_obj=f,
+                filename=getattr(f, "name", ""),
+                imported_by=getattr(request, "user", None),
+                period_start=p_start,
+                period_end=p_end,
+            )
+        except FuelImportError as e:
+            self.message_user(request, f"Ошибка импорта XLSX: {e}", level=messages.ERROR)
+            return redirect(reverse("admin:agromash_fuelreport_changelist"))
+        except Exception:
+            logger.exception("FuelReport import failed")
+            self.message_user(request, "Ошибка импорта XLSX (см. логи)", level=messages.ERROR)
+            return redirect(reverse("admin:agromash_fuelreport_changelist"))
+
+        self.message_user(
+            request,
+            f"Импорт выполнен: report_id={res.report.id}, rows={res.created_rows}, skipped={res.skipped_rows}",
+            level=messages.SUCCESS,
+        )
+        return redirect(reverse("admin:agromash_fuelreport_change", args=[res.report.id]))
+
+
+@admin.register(FuelOperation)
+class FuelOperationAdmin(admin.ModelAdmin):
+    list_display = (
+        "id",
+        "report",
+        "card_number",
+        "operation_at",
+        "product_name",
+        "quantity",
+        "unit",
+        "total_cost",
+        "station_owner",
+        "station_number",
+    )
+    list_filter = ("station_owner", "product_name")
+    search_fields = (
+        "card_number",
+        "vehicle_number",
+        "driver_name",
+        "station_number",
+        "product_name",
+        "product_code",
+        "report__contract_number",
+    )
+    autocomplete_fields = ("report",)
+    date_hierarchy = "operation_at"

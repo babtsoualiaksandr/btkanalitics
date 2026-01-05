@@ -1,8 +1,9 @@
 from django.db.models.signals import post_save, m2m_changed
 from django.dispatch import receiver
 from django.db.models import Q
+from django.db import IntegrityError, transaction
 
-from .models import Alarm, Monitor, TelegramSubscriber
+from .models import Alarm, Monitor, TelegramSubscriber, PlateIdentity
 from .services.alarm_data_parser import format_alarm_caption, parse_alarm_data
 from django.conf import settings
 
@@ -10,6 +11,7 @@ import logging
 
 from .va_api_client import VAApiClient
 from .services.telegram_client import send_message, send_photo
+from .services.plate_identities import extract_plate_rows
 
 
 logger = logging.getLogger(__name__)
@@ -130,3 +132,56 @@ def notify_subscriber_monitors_changed(sender, instance: TelegramSubscriber, act
         _telegram_send_message(chat_id=instance.chat_id, text="Вы подписаны на мониторы:\n" + "\n".join(lines))
     elif action == "post_remove":
         _telegram_send_message(chat_id=instance.chat_id, text="Вы отписаны от мониторов:\n" + "\n".join(lines))
+
+
+@receiver(post_save, sender=Alarm)
+def upsert_plate_identities(sender, instance: Alarm, created: bool, **kwargs):
+    """После сохранения Alarm(topic=PlateMatched) переносим plate_identities в нормализованную таблицу.
+
+    Требование: `PlateIdentity.number` уникален по всей БД.
+    """
+    if getattr(instance, 'topic', None) != 'PlateMatched':
+        return
+
+    rows = extract_plate_rows(getattr(instance, 'plate_identities', None))
+    if not rows:
+        return
+
+    for r in rows:
+        number = r.get('number')
+        if not number:
+            continue
+
+        defaults = {
+            "state": r.get("state") or "",
+            "plate_external_id": r.get("plate_external_id"),
+            "owner_last_name": r.get("owner_last_name") or "",
+            "owner_first_name": r.get("owner_first_name") or "",
+            "owner_middle_name": r.get("owner_middle_name") or "",
+            "list_external_id": r.get("list_external_id"),
+            "list_name": r.get("list_name") or "",
+            "list_level": r.get("list_level"),
+            "last_alarm": instance,
+        }
+
+        # Защита от гонок: uniqueness по number + транзакция.
+        try:
+            with transaction.atomic():
+                obj, created_obj = PlateIdentity.objects.get_or_create(number=number, defaults=defaults)
+                if created_obj:
+                    continue
+
+                update_fields = {"last_alarm": instance}
+                for k, v in defaults.items():
+                    if k in ("last_alarm",):
+                        continue
+                    if v and not getattr(obj, k):
+                        update_fields[k] = v
+                if update_fields:
+                    PlateIdentity.objects.filter(pk=obj.pk).update(**update_fields)
+        except IntegrityError:
+            # В редких случаях параллельные процессы создают одну и ту же запись.
+            # Повторяем чтение и update.
+            obj = PlateIdentity.objects.filter(number=number).first()
+            if obj:
+                PlateIdentity.objects.filter(pk=obj.pk).update(last_alarm=instance)

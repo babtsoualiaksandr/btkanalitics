@@ -1,0 +1,42 @@
+{% extends "admin/base_site.html" %}
+{% load i18n %}
+
+{% block content %}
+  <h1>{{ title }}</h1>
+
+  <form method="post" enctype="multipart/form-data" novalidate>
+    {% csrf_token %}
+
+    <fieldset class="module aligned">
+      <div class="form-row">
+        {{ form.xlsx_file.errors }}
+        <div>
+          <label>{{ form.xlsx_file.label }}:</label>
+          {{ form.xlsx_file }}
+        </div>
+      </div>
+
+      <div class="form-row">
+        {{ form.period_start.errors }}
+        <div>
+          <label>{{ form.period_start.label }}:</label>
+          {{ form.period_start }}
+        </div>
+      </div>
+
+      <div class="form-row">
+        {{ form.period_end.errors }}
+        <div>
+          <label>{{ form.period_end.label }}:</label>
+          {{ form.period_end }}
+        </div>
+      </div>
+    </fieldset>
+
+    <div class="submit-row">
+      <input type="submit" value="Импортировать" class="default" />
+      <a class="button" href="{% url 'admin:agromash_fuelreport_changelist' %}">Назад</a>
+    </div>
+  </form>
+{% endblock %}
+

@@ -305,3 +305,123 @@ class ReportRunLog(models.Model):
 
     def __str__(self):
         return f"ReportRunLog(subscription={self.subscription_id}, ok={self.ok})"
+
+
+class FuelReport(models.Model):
+    """Импортированный пооперационный отчёт по топливным картам (XLSX)."""
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    title = models.CharField(max_length=255, blank=True)
+    contract_number = models.CharField(max_length=255, blank=True, db_index=True)
+    organization_name = models.CharField(max_length=500, blank=True)
+
+    period_start = models.DateField(null=True, blank=True, db_index=True)
+    period_end = models.DateField(null=True, blank=True, db_index=True)
+
+    source_filename = models.CharField(max_length=255, blank=True)
+    source_sha256 = models.CharField(max_length=64, blank=True, db_index=True)
+
+    imported_by = models.ForeignKey(
+        User,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='fuel_reports',
+    )
+
+    rows_count = models.PositiveIntegerField(default=0)
+    imported_ok = models.BooleanField(default=True, db_index=True)
+    import_error = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ('-created_at',)
+
+    def __str__(self) -> str:
+        parts = ["FuelReport"]
+        if self.contract_number:
+            parts.append(f"contract={self.contract_number}")
+        if self.period_start and self.period_end:
+            parts.append(f"{self.period_start}..{self.period_end}")
+        return " ".join(parts)
+
+
+class FuelOperation(models.Model):
+    """Строка операции из пооперационного отчёта."""
+
+    report = models.ForeignKey(FuelReport, on_delete=models.CASCADE, related_name='operations')
+
+    card_number = models.CharField(max_length=32, db_index=True)
+    department_number = models.CharField(max_length=64, blank=True, db_index=True)
+
+    operation_at = models.DateTimeField(db_index=True)
+
+    product_name = models.CharField(max_length=255, blank=True)
+    product_code = models.CharField(max_length=64, blank=True, db_index=True)
+
+    quantity = models.DecimalField(max_digits=12, decimal_places=3, null=True, blank=True)
+    unit = models.CharField(max_length=32, blank=True)
+
+    unit_price = models.DecimalField(max_digits=12, decimal_places=4, null=True, blank=True)
+    cost = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    vat = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    discount = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+
+    service_percent = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True)
+    service_cost = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+
+    total_cost = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    total_vat = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+
+    station_owner = models.CharField(max_length=255, blank=True)
+    station_number = models.CharField(max_length=64, blank=True)
+    pump_section = models.CharField(max_length=64, blank=True)
+
+    driver_name = models.CharField(max_length=255, blank=True)
+    vehicle_number = models.CharField(max_length=64, blank=True)
+
+    class Meta:
+        ordering = ('-operation_at',)
+        indexes = [
+            models.Index(fields=['card_number', 'operation_at']),
+        ]
+
+    def __str__(self) -> str:
+        return f"FuelOperation(card={self.card_number}, at={self.operation_at})"
+
+
+class PlateIdentity(models.Model):
+    """Нормализованное хранилище распознанных номеров (topic=PlateMatched).
+
+    Источник: `Alarm.plate_identities`.
+    Поле `number` уникально по всей БД.
+    """
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    number = models.CharField(max_length=32, unique=True, db_index=True)
+    state = models.CharField(max_length=8, blank=True)
+    plate_external_id = models.BigIntegerField(null=True, blank=True)
+
+    owner_last_name = models.CharField(max_length=255, blank=True)
+    owner_first_name = models.CharField(max_length=255, blank=True)
+    owner_middle_name = models.CharField(max_length=255, blank=True)
+
+    list_external_id = models.BigIntegerField(null=True, blank=True)
+    list_name = models.CharField(max_length=255, blank=True)
+    list_level = models.IntegerField(null=True, blank=True)
+
+    last_alarm = models.ForeignKey(
+        Alarm,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='plate_identity_last_seen',
+    )
+
+    class Meta:
+        ordering = ("number",)
+
+    def __str__(self) -> str:
+        return f"PlateIdentity({self.state} {self.number})".strip()
