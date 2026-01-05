@@ -9,6 +9,7 @@ from celery.result import AsyncResult
 from django.conf import settings
 from django.db.models import Q
 from django.utils import timezone
+from django.core.mail import EmailMessage
 
 from agromash.models import AccountVideoAnalytics, ReportRunLog, TelegramReportSubscription
 from agromash.services.parse_event_runner import ParserRunContext, run_parse_event
@@ -44,6 +45,7 @@ def send_report_now(self, subscription_id: int, source: str = "admin") -> None:
         subscription=sub,
         subscriber=sub.subscriber,
         started_at=now,
+        channel=ReportRunLog.CHANNEL_TELEGRAM,
     )
 
     try:
@@ -129,6 +131,7 @@ def send_report_range_now(
         subscription=sub,
         subscriber=sub.subscriber,
         started_at=now,
+        channel=ReportRunLog.CHANNEL_TELEGRAM,
     )
 
     try:
@@ -266,6 +269,7 @@ def send_due_telegram_reports() -> None:
             subscription=sub,
             subscriber=sub.subscriber,
             started_at=started_at,
+            channel=ReportRunLog.CHANNEL_TELEGRAM,
         )
 
         try:
@@ -311,6 +315,153 @@ def send_due_telegram_reports() -> None:
             )
         except Exception:
             logger.exception("Ошибка отправки отчёта (subscription_id=%s)", sub.id)
+            finished_at = timezone.now()
+            run_log.finished_at = finished_at
+            run_log.duration_ms = int((time.monotonic() - t0) * 1000)
+            run_log.ok = False
+            run_log.error = "exception"
+            run_log.save(update_fields=["finished_at", "duration_ms", "ok", "error"])
+
+
+def _send_email_with_attachments(*, to_email: str, subject: str, body: str, attachments) -> None:
+    msg = EmailMessage(
+        subject=subject,
+        body=body,
+        to=[to_email],
+    )
+    for filename, content, mime_type in attachments or []:
+        msg.attach(filename, content, mime_type)
+    # fail_silently=False — ошибки должны попадать в логи/ReportRunLog
+    msg.send(fail_silently=False)
+
+
+@shared_task(bind=True, name="agromash.send_email_report_now")
+def send_email_report_now(self, subscription_id: int, source: str = "admin") -> None:
+    """Сформировать и отправить email-отчёт по конкретной подписке."""
+    now = timezone.now()
+    t0 = time.monotonic()
+
+    sub = (
+        TelegramReportSubscription.objects.select_related("subscriber")
+        .prefetch_related("monitors")
+        .filter(pk=subscription_id)
+        .first()
+    )
+    if not sub:
+        logger.warning("send_email_report_now: invalid subscription_id=%s", subscription_id)
+        return
+    if not sub.email:
+        logger.warning("send_email_report_now: empty email for subscription_id=%s", sub.id)
+        return
+
+    run_log = ReportRunLog.objects.create(
+        subscription=sub,
+        subscriber=sub.subscriber if sub.subscriber_id else None,
+        started_at=now,
+        channel=ReportRunLog.CHANNEL_EMAIL,
+    )
+
+    try:
+        caption, attachments, rows_count = generate_report_attachments(sub=sub, now=now)
+        subject = f"BTK report: {rows_count} alarms"
+        _send_email_with_attachments(
+            to_email=str(sub.email),
+            subject=subject,
+            body=caption,
+            attachments=attachments,
+        )
+
+        # next_run_at пересчитываем так же, как для Telegram
+        sub.last_sent_at = now
+        sub.next_run_at = compute_next_run_at(now=now, frequency=sub.frequency)
+        sub.save(update_fields=["last_sent_at", "next_run_at", "updated_at"])
+
+        run_log.finished_at = timezone.now()
+        run_log.duration_ms = int((time.monotonic() - t0) * 1000)
+        run_log.ok = True
+        run_log.error = ""
+        run_log.alarms_count = int(rows_count or 0)
+        run_log.attachments_count = len(attachments or [])
+        run_log.save(
+            update_fields=[
+                "finished_at",
+                "duration_ms",
+                "ok",
+                "error",
+                "alarms_count",
+                "attachments_count",
+            ]
+        )
+    except Exception:
+        logger.exception("send_email_report_now failed (subscription_id=%s)", sub.id)
+        run_log.finished_at = timezone.now()
+        run_log.duration_ms = int((time.monotonic() - t0) * 1000)
+        run_log.ok = False
+        run_log.error = "exception"
+        run_log.save(update_fields=["finished_at", "duration_ms", "ok", "error"])
+
+
+@shared_task(name="agromash.send_due_email_reports")
+def send_due_email_reports() -> None:
+    """Периодическая задача: отправляет email-отчёты подпискам, у которых подошёл срок."""
+    now = timezone.now()
+
+    due_qs = (
+        TelegramReportSubscription.objects.filter(enabled=True)
+        .exclude(email__isnull=True)
+        .exclude(email="")
+        .filter(Q(next_run_at__lte=now) | Q(next_run_at__isnull=True))
+        .select_related("subscriber")
+        .prefetch_related("monitors")
+        .order_by("id")
+    )
+
+    for sub in due_qs:
+        if sub.next_run_at and sub.next_run_at > now:
+            continue
+
+        started_at = timezone.now()
+        t0 = time.monotonic()
+        run_log = ReportRunLog.objects.create(
+            subscription=sub,
+            subscriber=sub.subscriber if sub.subscriber_id else None,
+            started_at=started_at,
+            channel=ReportRunLog.CHANNEL_EMAIL,
+        )
+
+        try:
+            caption, attachments, rows_count = generate_report_attachments(sub=sub, now=now)
+            subject = f"BTK report: {rows_count} alarms"
+            _send_email_with_attachments(
+                to_email=str(sub.email),
+                subject=subject,
+                body=caption,
+                attachments=attachments,
+            )
+
+            sub.last_sent_at = now
+            sub.next_run_at = compute_next_run_at(now=now, frequency=sub.frequency)
+            sub.save(update_fields=["last_sent_at", "next_run_at", "updated_at"])
+
+            finished_at = timezone.now()
+            run_log.finished_at = finished_at
+            run_log.duration_ms = int((time.monotonic() - t0) * 1000)
+            run_log.ok = True
+            run_log.error = ""
+            run_log.alarms_count = int(rows_count or 0)
+            run_log.attachments_count = len(attachments or [])
+            run_log.save(
+                update_fields=[
+                    "finished_at",
+                    "duration_ms",
+                    "ok",
+                    "error",
+                    "alarms_count",
+                    "attachments_count",
+                ]
+            )
+        except Exception:
+            logger.exception("Ошибка отправки email-отчёта (subscription_id=%s)", sub.id)
             finished_at = timezone.now()
             run_log.finished_at = finished_at
             run_log.duration_ms = int((time.monotonic() - t0) * 1000)

@@ -34,6 +34,23 @@ BASE_URL = config('BASE_URL')
 TLG_BOT_TOKEN = config('TLG_BOT_TOKEN')
 TLG_CHAT_ID = config('TLG_CHAT_ID')
 
+# -----------------
+# Email (SMTP)
+# -----------------
+EMAIL_BACKEND = config(
+    'EMAIL_BACKEND',
+    default='django.core.mail.backends.smtp.EmailBackend',
+)
+EMAIL_HOST = config('EMAIL_HOST', default='')
+EMAIL_PORT = config('EMAIL_PORT', default=587, cast=int)
+EMAIL_HOST_USER = config('EMAIL_HOST_USER', default='')
+EMAIL_HOST_PASSWORD = config('EMAIL_HOST_PASSWORD', default='')
+EMAIL_USE_TLS = config('EMAIL_USE_TLS', default=True, cast=bool)
+EMAIL_USE_SSL = config('EMAIL_USE_SSL', default=False, cast=bool)
+EMAIL_TIMEOUT = config('EMAIL_TIMEOUT', default=20, cast=int)
+DEFAULT_FROM_EMAIL = config('DEFAULT_FROM_EMAIL', default=EMAIL_HOST_USER or 'webmaster@localhost')
+SERVER_EMAIL = config('SERVER_EMAIL', default=DEFAULT_FROM_EMAIL)
+
 # Application definition
 
 INSTALLED_APPS = [
@@ -125,6 +142,9 @@ USE_I18N = True
 
 USE_TZ = True
 
+# Django 6+: явный тип PK по умолчанию (убирает предупреждения W042)
+DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
 
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/6.0/howto/static-files/
@@ -148,6 +168,10 @@ CELERY_TASK_ACKS_LATE = True
 CELERY_BEAT_SCHEDULE = {
     "send_due_telegram_reports_every_minute": {
         "task": "agromash.send_due_telegram_reports",
+        "schedule": 60.0,
+    },
+    "send_due_email_reports_every_minute": {
+        "task": "agromash.send_due_email_reports",
         "schedule": 60.0,
     },
 }

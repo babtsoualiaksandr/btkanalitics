@@ -148,6 +148,14 @@ class TelegramReportSubscription(models.Model):
         related_name="report_subscriptions",
         verbose_name="Подписчик",
     )
+
+    email = models.EmailField(
+        blank=True,
+        null=True,
+        db_index=True,
+        verbose_name="Email получателя",
+        help_text="Если задан — отчёт будет отправляться также на email.",
+    )
     monitors = models.ManyToManyField(
         Monitor,
         blank=True,
@@ -248,6 +256,20 @@ class TelegramEventLog(models.Model):
 
 class ReportRunLog(models.Model):
     """Журнал формирований/отправок отчётов (с временем генерации)."""
+
+    CHANNEL_TELEGRAM = "telegram"
+    CHANNEL_EMAIL = "email"
+    CHANNEL_CHOICES = (
+        (CHANNEL_TELEGRAM, "Telegram"),
+        (CHANNEL_EMAIL, "Email"),
+    )
+
+    channel = models.CharField(
+        max_length=16,
+        choices=CHANNEL_CHOICES,
+        default=CHANNEL_TELEGRAM,
+        db_index=True,
+    )
 
     created_at = models.DateTimeField(auto_now_add=True)
 

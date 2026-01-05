@@ -5,6 +5,8 @@ import time
 import sys
 from django.conf import settings
 
+from requests.exceptions import RequestException
+
 
 import logging
 
@@ -14,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 class AgromashConfig(AppConfig):
     name = 'agromash'
+    default_auto_field = 'django.db.models.BigAutoField'
 
     def ready(self):
         import agromash.signals
@@ -29,21 +32,28 @@ class AgromashConfig(AppConfig):
         def run_bot():
             token = settings.TLG_BOT_TOKEN
             if token:
+                session = requests.Session()
+
                 # Если был настроен webhook, polling через getUpdates не будет работать.
                 # Для этого проекта используем polling, поэтому перед стартом снимаем webhook.
                 try:
-                    requests.get(
+                    session.get(
                         f"https://api.telegram.org/bot{token}/deleteWebhook",
                         params={"drop_pending_updates": True},
                         timeout=15,
                     )
+                except RequestException as e:
+                    # Сетевые ошибки бывают временными (блокировки/обрывы/перезапуск сети).
+                    # Не спамим stacktrace в journalctl.
+                    logger.warning("Failed to deleteWebhook (polling may not work): %s", e)
                 except Exception:
                     logger.exception("Failed to deleteWebhook (polling may not work)")
 
                 offset = 0
+                backoff_sec = 1
                 while True:
                     try:
-                        response = requests.get(
+                        response = session.get(
                             f'https://api.telegram.org/bot{token}/getUpdates?offset={offset}',
                             timeout=30,
                         )
@@ -91,7 +101,16 @@ class AgromashConfig(AppConfig):
                                             requests.post(f'https://api.telegram.org/bot{token}/sendMessage',
                                                          json={'chat_id': chat_id, 'text': 'Invalid command. Use /set <monitor_id> where monitor_id is a number.'})
                                 offset = update['update_id'] + 1
+
+                        # Успешный цикл — сброс backoff
+                        backoff_sec = 1
                         time.sleep(1)
+                    except RequestException as e:
+                        # Типовая ситуация: Connection reset by peer / TLS handshake etc.
+                        # Логируем без traceback и применяем backoff.
+                        logger.warning("Telegram polling network error: %s", e)
+                        time.sleep(backoff_sec)
+                        backoff_sec = min(60, backoff_sec * 2)
                     except Exception:
                         logger.exception("Telegram polling loop error")
                         time.sleep(5)

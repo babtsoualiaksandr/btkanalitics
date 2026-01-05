@@ -25,7 +25,7 @@ from .models import (
 )
 
 from .tasks import parse_event_task, request_stop_parser
-from .tasks import send_report_now, send_report_range_now
+from .tasks import send_report_now, send_report_range_now, send_email_report_now
 
 
 logger = logging.getLogger(__name__)
@@ -542,6 +542,7 @@ class TelegramReportSubscriptionAdmin(admin.ModelAdmin):
     list_display = (
         "id",
         "subscriber",
+        "email",
         "frequency",
         "period_from_minutes",
         "period_to_minutes",
@@ -575,9 +576,13 @@ class TelegramReportSubscriptionAdmin(admin.ModelAdmin):
         def send_range_controls(obj: TelegramReportSubscription):
             return self._send_range_controls(request, obj)
 
+        def send_email_now_controls(obj: TelegramReportSubscription):
+            return self._send_email_now_controls(request, obj)
+
         send_now_controls.short_description = "Отчёт"
+        send_email_now_controls.short_description = "Email"
         send_range_controls.short_description = "Диапазон"
-        return (*base, send_now_controls, send_range_controls)
+        return (*base, send_now_controls, send_email_now_controls, send_range_controls)
 
     def get_urls(self):
         urls = super().get_urls()
@@ -591,6 +596,11 @@ class TelegramReportSubscriptionAdmin(admin.ModelAdmin):
                 '<path:object_id>/send-range/',
                 self.admin_site.admin_view(self.send_range_view),
                 name='agromash_telegramreportsubscription_send_range',
+            ),
+            path(
+                '<path:object_id>/send-email-now/',
+                self.admin_site.admin_view(self.send_email_now_view),
+                name='agromash_telegramreportsubscription_send_email_now',
             ),
         ]
         return custom_urls + urls
@@ -618,6 +628,19 @@ class TelegramReportSubscriptionAdmin(admin.ModelAdmin):
             send_range_url,
         )
 
+    def _send_email_now_controls(self, request, obj: TelegramReportSubscription):
+        send_url = reverse('admin:agromash_telegramreportsubscription_send_email_now', args=[obj.pk])
+        disabled = "" if (obj.email and obj.enabled) else "disabled"
+        title = "" if not disabled else "Нет email или подписка выключена"
+        return format_html(
+            '<button type="submit" class="button" formaction="{}" formmethod="post" {} title="{}">'
+            'Отправить email'
+            '</button>',
+            send_url,
+            disabled,
+            title,
+        )
+
     def send_now_view(self, request, object_id):
         if request.method != 'POST':
             return HttpResponseNotAllowed(['POST'])
@@ -640,6 +663,38 @@ class TelegramReportSubscriptionAdmin(admin.ModelAdmin):
         except Exception:
             logging.getLogger(__name__).exception("Ошибка постановки отчёта в очередь (subscription_id=%s)", sub.id)
             self.message_user(request, "Не удалось поставить задачу в очередь Celery — см. логи", level=messages.ERROR)
+
+        return redirect(request.META.get('HTTP_REFERER') or reverse('admin:agromash_telegramreportsubscription_changelist'))
+
+    def send_email_now_view(self, request, object_id):
+        if request.method != 'POST':
+            return HttpResponseNotAllowed(['POST'])
+
+        sub: TelegramReportSubscription = self.get_object(request, object_id)
+        if sub is None:
+            raise Http404('TelegramReportSubscription not found')
+
+        if not sub.email:
+            self.message_user(request, 'У подписки не задан email — отправка невозможна', level=messages.ERROR)
+            return redirect(request.META.get('HTTP_REFERER') or reverse('admin:agromash_telegramreportsubscription_changelist'))
+
+        if not sub.enabled:
+            self.message_user(request, 'Подписка выключена — отправка невозможна', level=messages.ERROR)
+            return redirect(request.META.get('HTTP_REFERER') or reverse('admin:agromash_telegramreportsubscription_changelist'))
+
+        try:
+            async_res = send_email_report_now.delay(sub.id, source="admin")
+            self.message_user(
+                request,
+                f"Email-отправка отчёта поставлена в очередь Celery (subscription_id={sub.id}, task_id={async_res.id})",
+                level=messages.SUCCESS,
+            )
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "Ошибка постановки email-отчёта в очередь (subscription_id=%s)",
+                sub.id,
+            )
+            self.message_user(request, "Не удалось поставить email-задачу в очередь Celery — см. логи", level=messages.ERROR)
 
         return redirect(request.META.get('HTTP_REFERER') or reverse('admin:agromash_telegramreportsubscription_changelist'))
 

@@ -1,6 +1,8 @@
 from django.test import TestCase
 from django.utils import timezone
 from django.urls import reverse
+from django.test import override_settings
+from django.core import mail
 from unittest.mock import Mock, patch
 
 from agromash.models import AccountVideoAnalytics, Alarm, Monitor, TelegramReportSubscription, TelegramSubscriber
@@ -8,6 +10,7 @@ from agromash.services.alarm_data_parser import format_alarm_caption, parse_alar
 from agromash.services.report_scheduler import compute_next_run_at
 from agromash.services.reporting import get_alarms_for_subscription
 from agromash.va_api_client import VAApiClient
+from agromash.tasks import send_email_report_now
 
 
 class _FakeResponse:
@@ -292,3 +295,31 @@ class ServeSnapshotBootstrapAuthTest(TestCase):
             resp = self.client.get(url)
             self.assertEqual(resp.status_code, 200)
             self.assertEqual(resp.content, b"img")
+
+
+class EmailReportTest(TestCase):
+    @override_settings(EMAIL_BACKEND='django.core.mail.backends.locmem.EmailBackend')
+    def test_send_email_report_now_sends_email_with_attachments(self):
+        sub_user = TelegramSubscriber.objects.create(chat_id=123, username="u")
+        sub = TelegramReportSubscription.objects.create(
+            subscriber=sub_user,
+            email="to@example.test",
+            period_from_minutes=60,
+            period_to_minutes=0,
+            frequency=TelegramReportSubscription.FREQ_HOURLY,
+            enabled=True,
+        )
+
+        with patch('agromash.tasks.generate_report_attachments') as gen:
+            gen.return_value = (
+                "caption",
+                [("r.txt", b"hi", "text/plain")],
+                1,
+            )
+            send_email_report_now.run(sub.id, source="test")
+
+        self.assertEqual(len(mail.outbox), 1)
+        msg = mail.outbox[0]
+        self.assertEqual(msg.to, ["to@example.test"])
+        self.assertIn("caption", msg.body)
+        self.assertEqual(len(msg.attachments), 1)
