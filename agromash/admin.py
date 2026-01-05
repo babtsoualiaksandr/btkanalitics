@@ -12,7 +12,6 @@ from django.db.models import Count
 from django.conf import settings
 from django.http import Http404
 from django.http import HttpResponseNotAllowed
-from django.middleware.csrf import get_token
 from django.shortcuts import redirect
 from django.urls import path, reverse
 from django.template.response import TemplateResponse
@@ -27,6 +26,9 @@ from .models import (
 
 from .tasks import parse_event_task, request_stop_parser
 from .tasks import send_report_now, send_report_range_now
+
+
+logger = logging.getLogger(__name__)
 
 # -----------------
 # Django admin: название во вкладке браузера / заголовки
@@ -184,39 +186,55 @@ class AccountVideoAnalyticsAdmin(admin.ModelAdmin):
 
     def _parser_controls(self, request, obj: AccountVideoAnalytics):
         """Кнопки запуска/остановки парсера для конкретной записи прямо из списка."""
-        csrf = get_token(request)
-
         run_url = reverse('admin:agromash_accountvideoanalytics_run_parse_event_for_account', args=[obj.pk])
         stop_url = reverse('admin:agromash_accountvideoanalytics_stop_parse_event_for_account', args=[obj.pk])
 
+        # ВАЖНО: в changelist Django admin уже есть внешний <form id="changelist-form"> с CSRF.
+        # Вложенные <form> внутри таблицы — невалидный HTML и может ломать submit (особенно на последней строке).
+        # Поэтому используем HTML5 `formaction`/`formmethod` без вложенных форм.
         if obj.is_parser_running:
             return format_html(
-                '<form method="post" action="{}" style="display:inline">'
-                '<input type="hidden" name="csrfmiddlewaretoken" value="{}">'
-                '<button type="submit" class="button" style="background:#a61e1e;color:white;">Stop</button>'
-                '</form>',
+                '<button type="submit" class="button" style="background:#a61e1e;color:white;" '
+                'formaction="{}" formmethod="post">Stop</button>',
                 stop_url,
-                csrf,
             )
 
         return format_html(
-            '<form method="post" action="{}" style="display:inline">'
-            '<input type="hidden" name="csrfmiddlewaretoken" value="{}">'
-            '<button type="submit" class="button">Start</button>'
-            '</form>',
+            '<button type="submit" class="button" formaction="{}" formmethod="post">Start</button>',
             run_url,
-            csrf,
         )
 
     def run_parse_event_for_account_view(self, request, object_id):
         if request.method != 'POST':
             return HttpResponseNotAllowed(['POST'])
 
+        user = getattr(request, 'user', None)
+        user_tag = f"user_id={getattr(user, 'id', None)} username={getattr(user, 'username', None)}"
+        ip = request.META.get('REMOTE_ADDR')
+        logger.info(
+            "parser_start requested (%s, ip=%s) account_id=%s",
+            user_tag,
+            ip,
+            object_id,
+        )
+
         account = self.get_object(request, object_id)
         if account is None:
+            logger.warning(
+                "parser_start failed: account not found (%s, ip=%s) account_id=%s",
+                user_tag,
+                ip,
+                object_id,
+            )
             raise Http404('AccountVideoAnalytics not found')
 
         if account.is_parser_running:
+            logger.warning(
+                "parser_start skipped: already running (%s, ip=%s) account_id=%s",
+                user_tag,
+                ip,
+                account.id,
+            )
             self.message_user(
                 request,
                 f'Парсер уже запущен для аккаунта: {account.name}',
@@ -224,13 +242,38 @@ class AccountVideoAnalyticsAdmin(admin.ModelAdmin):
             )
             return redirect(request.META.get('HTTP_REFERER') or reverse('admin:agromash_accountvideoanalytics_changelist'))
 
-        async_res = parse_event_task.delay(account.id)
+        try:
+            async_res = parse_event_task.delay(account.id)
+        except Exception:
+            logger.exception(
+                "parser_start failed: celery enqueue error (%s, ip=%s) account_id=%s",
+                user_tag,
+                ip,
+                account.id,
+            )
+            self.message_user(
+                request,
+                f'Не удалось запустить парсер для аккаунта: {account.name} — ошибка постановки задачи в Celery (см. логи)',
+                level=messages.ERROR,
+            )
+            return redirect(
+                request.META.get('HTTP_REFERER')
+                or reverse('admin:agromash_accountvideoanalytics_changelist')
+            )
 
         AccountVideoAnalytics.objects.filter(pk=account.id).update(
             parser_status=AccountVideoAnalytics.PARSER_STATUS_STARTING,
             parser_task_id=async_res.id,
             parser_stop_requested=False,
             parser_last_error=None,
+        )
+
+        logger.info(
+            "parser_start enqueued ok (%s, ip=%s) account_id=%s task_id=%s",
+            user_tag,
+            ip,
+            account.id,
+            async_res.id,
         )
 
         self.message_user(
@@ -245,11 +288,52 @@ class AccountVideoAnalyticsAdmin(admin.ModelAdmin):
         if request.method != 'POST':
             return HttpResponseNotAllowed(['POST'])
 
+        user = getattr(request, 'user', None)
+        user_tag = f"user_id={getattr(user, 'id', None)} username={getattr(user, 'username', None)}"
+        ip = request.META.get('REMOTE_ADDR')
+        logger.info(
+            "parser_stop requested (%s, ip=%s) account_id=%s",
+            user_tag,
+            ip,
+            object_id,
+        )
+
         account = self.get_object(request, object_id)
         if account is None:
+            logger.warning(
+                "parser_stop failed: account not found (%s, ip=%s) account_id=%s",
+                user_tag,
+                ip,
+                object_id,
+            )
             raise Http404('AccountVideoAnalytics not found')
 
-        task_id = request_stop_parser(account_id=account.id, terminate=True)
+        try:
+            task_id = request_stop_parser(account_id=account.id, terminate=True)
+        except Exception:
+            logger.exception(
+                "parser_stop failed: request_stop_parser exception (%s, ip=%s) account_id=%s",
+                user_tag,
+                ip,
+                account.id,
+            )
+            self.message_user(
+                request,
+                f'Не удалось запросить остановку парсера для аккаунта: {account.name} (см. логи)',
+                level=messages.ERROR,
+            )
+            return redirect(
+                request.META.get('HTTP_REFERER')
+                or reverse('admin:agromash_accountvideoanalytics_changelist')
+            )
+
+        logger.info(
+            "parser_stop requested ok (%s, ip=%s) account_id=%s task_id=%s",
+            user_tag,
+            ip,
+            account.id,
+            task_id,
+        )
         if task_id:
             self.message_user(
                 request,
@@ -329,7 +413,8 @@ class AlarmAdmin(admin.ModelAdmin):
     
     def snapshot_preview(self, obj):
         """Отображение превью изображения в списке и форме редактирования"""
-        if obj.original_quality_snapshot and obj.account and obj.account.access_token:
+        # access_token может отсутствовать при первичном запуске; serve_snapshot сам выполнит login.
+        if obj.original_quality_snapshot and obj.account:
             # Используем наш view для отображения изображения
             from django.urls import reverse
             image_url = reverse('serve_snapshot', args=[obj.alarm_id])
@@ -511,19 +596,17 @@ class TelegramReportSubscriptionAdmin(admin.ModelAdmin):
         return custom_urls + urls
 
     def _send_now_controls(self, request, obj: TelegramReportSubscription):
-        csrf = get_token(request)
         send_now_url = reverse('admin:agromash_telegramreportsubscription_send_now', args=[obj.pk])
 
         disabled = "" if (obj.subscriber_id and getattr(obj.subscriber, 'chat_id', None)) else "disabled"
         title = "" if not disabled else "Нет chat_id у подписчика"
 
+        # Аналогично parser buttons: используем formaction без вложенных <form>.
         return format_html(
-            '<form method="post" action="{}" style="display:inline">'
-            '<input type="hidden" name="csrfmiddlewaretoken" value="{}">'
-            '<button type="submit" class="button" {} title="{}">Сформировать и отправить</button>'
-            '</form>',
+            '<button type="submit" class="button" formaction="{}" formmethod="post" {} title="{}">'
+            'Сформировать и отправить'
+            '</button>',
             send_now_url,
-            csrf,
             disabled,
             title,
         )

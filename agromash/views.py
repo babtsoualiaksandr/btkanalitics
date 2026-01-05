@@ -220,7 +220,9 @@ def serve_snapshot(request, alarm_id):
     except Alarm.DoesNotExist:
         raise Http404("Alarm not found")
     
-    if not alarm.original_quality_snapshot or not alarm.account or not alarm.account.access_token:
+    # Важно для первичного запуска: если токенов ещё нет в БД,
+    # VAApiClient сам выполнит login и сохранит их.
+    if not alarm.original_quality_snapshot or not alarm.account:
         raise Http404("No snapshot available")
     
     try:

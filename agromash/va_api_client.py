@@ -13,6 +13,25 @@ from agromash.models import AccountVideoAnalytics
 logger = logging.getLogger(__name__)
 
 
+class VAAuthError(RuntimeError):
+    """Ошибка аутентификации в VideoAnalytics.
+
+    Используется, чтобы верхний уровень мог отличить auth-проблемы
+    (неверные креды/429 rate limit) от прочих ошибок.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: Optional[int] = None,
+        retry_after_sec: Optional[int] = None,
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.retry_after_sec = retry_after_sec
+
+
 @dataclass(frozen=True)
 class TokenPair:
     access_token: str
@@ -57,8 +76,20 @@ class VAApiClient:
         """
         account = self._get_account()
         if account.access_token:
+            logger.debug(
+                "VA API: ensure_authenticated ok (access_token уже есть) (account_id=%s)",
+                self._account_id,
+            )
             return
+        logger.info(
+            "VA API: access_token отсутствует, выполняю login (account_id=%s)",
+            self._account_id,
+        )
         self._login_and_persist()
+        logger.info(
+            "VA API: login выполнен, токены сохранены (account_id=%s)",
+            self._account_id,
+        )
 
     def request(
         self,
@@ -77,6 +108,11 @@ class VAApiClient:
         """
         url = self._build_url(path)
         timeout = timeout or self._timeout
+
+        # Критично для первичного запуска сервиса: если токенов ещё нет в БД,
+        # делаем login ДО первого HTTP-запроса, чтобы сразу сохранить токены.
+        # (Иначе первый запрос уйдёт без Authorization и будет лишний 401.)
+        self.ensure_authenticated()
 
         last_exc: Optional[BaseException] = None
 
@@ -278,32 +314,73 @@ class VAApiClient:
             TokenPair(access_token=access_token, refresh_token=refresh_token),
             keep_old_refresh_if_missing=True,
         )
+        logger.info(
+            "VA API: refresh успешен, токены обновлены (account_id=%s)",
+            self._account_id,
+        )
         return True
 
     def _login_and_persist(self) -> None:
-        account = self._get_account()
-        url = self._build_url('/oauth2/v1/auth/authenticate')
-        payload = {
-            "name": account.name,
-            "password": account.password,
-            "rememberme": True,
-        }
+        # Делаем login под DB-lock'ом (select_for_update), чтобы при параллельном старте
+        # нескольких воркеров не было «шторма» логинов.
+        with transaction.atomic():
+            account = AccountVideoAnalytics.objects.select_for_update().get(pk=self._account_id)
 
-        resp = self._session.post(url, json=payload, timeout=self._timeout)
-        if resp.status_code != 200:
-            raise RuntimeError(
-                f"Login failed for account_id={self._account_id}: status={resp.status_code}"
+            # Если другой процесс уже успел залогиниться — ничего не делаем.
+            if account.access_token:
+                logger.debug(
+                    "VA API: login не требуется (токен уже выставлен другим процессом) (account_id=%s)",
+                    self._account_id,
+                )
+                return
+
+            logger.info(
+                "VA API: выполняю POST authenticate (account_id=%s)",
+                self._account_id,
             )
 
-        data = resp.json()
-        access_token = data.get('access_token')
-        refresh_token = data.get('refresh_token')
-        if not access_token:
-            raise RuntimeError(
-                f"Login response missing access_token for account_id={self._account_id}"
-            )
+            url = self._build_url('/oauth2/v1/auth/authenticate')
+            payload = {
+                "name": account.name,
+                "password": account.password,
+                "rememberme": True,
+            }
 
-        self._persist_tokens(TokenPair(access_token=access_token, refresh_token=refresh_token))
+            resp = self._session.post(url, json=payload, timeout=self._timeout)
+            if resp.status_code != 200:
+                retry_after = None
+                if resp.status_code == 429:
+                    try:
+                        retry_after = int(resp.headers.get('Retry-After') or 0) or None
+                    except Exception:
+                        retry_after = None
+                logger.warning(
+                    "VA API: authenticate вернул status=%s (account_id=%s)",
+                    resp.status_code,
+                    self._account_id,
+                )
+                raise VAAuthError(
+                    f"Login failed for account_id={self._account_id}: status={resp.status_code}",
+                    status_code=resp.status_code,
+                    retry_after_sec=retry_after,
+                )
+
+            data = resp.json()
+            access_token = data.get('access_token')
+            refresh_token = data.get('refresh_token')
+            if not access_token:
+                raise RuntimeError(
+                    f"Login response missing access_token for account_id={self._account_id}"
+                )
+
+            account.access_token = access_token
+            account.refresh_token = refresh_token
+            account.save(update_fields=["access_token", "refresh_token"])
+
+            logger.info(
+                "VA API: authenticate ok, access_token сохранён (account_id=%s)",
+                self._account_id,
+            )
 
     def _persist_tokens(
         self,
@@ -320,4 +397,3 @@ class VAApiClient:
             elif not keep_old_refresh_if_missing:
                 acc.refresh_token = None
             acc.save(update_fields=["access_token", "refresh_token"])
-

@@ -9,7 +9,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from agromash.models import AccountVideoAnalytics, Alarm, Monitor
-from agromash.va_api_client import VAApiClient
+from agromash.va_api_client import VAApiClient, VAAuthError
 
 
 logger = logging.getLogger(__name__)
@@ -23,6 +23,10 @@ class ParserRunContext:
     stop_check_interval_sec: float = 2.0
     # Частота heartbeat (для индикации в админке)
     heartbeat_interval_sec: float = 5.0
+
+    # Ограничение числа подряд неуспешных попыток аутентификации.
+    # Нужно, чтобы при неверных кредах/429 не крутить бесконечный цикл login.
+    max_auth_failures: int = 3
 
 
 def _mark_started(account_id: int, *, task_id: Optional[str]) -> None:
@@ -128,6 +132,7 @@ def run_parse_event(
     client = VAApiClient(account_id=account_id, base_url=ctx.base_url)
     last_stop_check = 0.0
     last_hb = 0.0
+    auth_failures = 0
 
     def should_stop(now_monotonic: float) -> bool:
         nonlocal last_stop_check
@@ -153,6 +158,19 @@ def run_parse_event(
 
             try:
                 client.ensure_authenticated()
+                auth_failures = 0
+            except VAAuthError as e:
+                auth_failures += 1
+                write(f"Login failed ({auth_failures}/{ctx.max_auth_failures}): {e}")
+
+                if auth_failures >= int(ctx.max_auth_failures):
+                    _mark_error(account_id, error_text=f"Auth failed {auth_failures} times: {e}")
+                    return
+
+                # Если API отдает 429 — уважаем Retry-After (если задан), иначе небольшой backoff.
+                delay = getattr(e, 'retry_after_sec', None) or float(auth_failures)
+                time.sleep(delay)
+                continue
             except Exception as e:
                 write(f"Login failed: {e}")
                 time.sleep(1)

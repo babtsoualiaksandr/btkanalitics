@@ -1,10 +1,27 @@
 from django.test import TestCase
 from django.utils import timezone
+from django.urls import reverse
+from unittest.mock import Mock, patch
 
 from agromash.models import AccountVideoAnalytics, Alarm, Monitor, TelegramReportSubscription, TelegramSubscriber
 from agromash.services.alarm_data_parser import format_alarm_caption, parse_alarm_data
 from agromash.services.report_scheduler import compute_next_run_at
 from agromash.services.reporting import get_alarms_for_subscription
+from agromash.va_api_client import VAApiClient
+
+
+class _FakeResponse:
+    def __init__(self, *, status_code: int = 200, json_data=None, content: bytes = b"", headers=None):
+        self.status_code = status_code
+        self._json_data = json_data
+        self.content = content
+        self.headers = headers or {}
+
+    def json(self):
+        return self._json_data
+
+    def close(self):
+        return None
 
 
 class TelegramSubscriberMonitorM2MTest(TestCase):
@@ -205,3 +222,73 @@ class ReportSubscriptionTest(TestCase):
 
         qs = get_alarms_for_subscription(sub=report, now=now)
         self.assertEqual(qs.count(), 1)
+
+
+class VAApiClientBootstrapAuthTest(TestCase):
+    def test_request_when_tokens_missing_logs_in_and_persists_tokens(self):
+        acc = AccountVideoAnalytics.objects.create(
+            name="login",
+            password="pass",
+            contract="c",
+            organization="o",
+            access_token=None,
+            refresh_token=None,
+        )
+
+        session = Mock()
+        session.post.return_value = _FakeResponse(
+            status_code=200,
+            json_data={"access_token": "A", "refresh_token": "R"},
+        )
+        session.request.return_value = _FakeResponse(status_code=200, json_data={"ok": True})
+
+        client = VAApiClient(account_id=acc.id, base_url="https://example.test", session=session)
+        resp = client.request("GET", "/api/v1/ping")
+        self.assertEqual(resp.status_code, 200)
+
+        acc.refresh_from_db()
+        self.assertEqual(acc.access_token, "A")
+        self.assertEqual(acc.refresh_token, "R")
+
+        # Первый запрос должен уйти уже с Bearer-токеном (без лишнего 401 на старте).
+        _, kwargs = session.request.call_args
+        self.assertIn("headers", kwargs)
+        self.assertEqual(kwargs["headers"].get("Authorization"), "Bearer A")
+
+        # login должен быть выполнен ровно один раз
+        self.assertEqual(session.post.call_count, 1)
+
+
+class ServeSnapshotBootstrapAuthTest(TestCase):
+    def test_serve_snapshot_does_not_require_access_token_in_db(self):
+        acc = AccountVideoAnalytics.objects.create(
+            name="login",
+            password="pass",
+            contract="c",
+            organization="o",
+            access_token=None,
+            refresh_token=None,
+        )
+        alarm = Alarm.objects.create(
+            monitor_id=1,
+            monitor_name="m",
+            alarm_id="a1",
+            topic="t",
+            start_time=1,
+            end_time=1,
+            event_id=1,
+            original_quality_snapshot="/api/v2/snap/original",
+            data={"topic": "t"},
+            account=acc,
+        )
+
+        with patch("agromash.views.VAApiClient.request") as req_mock:
+            req_mock.return_value = _FakeResponse(
+                status_code=200,
+                content=b"img",
+                headers={"content-type": "image/jpeg"},
+            )
+            url = reverse("serve_snapshot", args=[alarm.alarm_id])
+            resp = self.client.get(url)
+            self.assertEqual(resp.status_code, 200)
+            self.assertEqual(resp.content, b"img")

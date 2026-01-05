@@ -151,3 +151,31 @@ CELERY_BEAT_SCHEDULE = {
         "schedule": 60.0,
     },
 }
+
+# -----------------
+# Logging
+# -----------------
+# Важно для systemd/journalctl: выводим логи в stdout/stderr.
+# Это позволит видеть сообщения (в т.ч. auth VA API клиента) в:
+#   journalctl -u btkanalitics-web.service -n 100 --no-pager -o short-iso
+LOG_LEVEL = config('LOG_LEVEL', default='INFO')
+
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'short': {
+            'format': '%(asctime)s %(levelname)s %(name)s: %(message)s',
+        },
+    },
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+            'formatter': 'short',
+        },
+    },
+    'root': {
+        'handlers': ['console'],
+        'level': LOG_LEVEL,
+    },
+}
