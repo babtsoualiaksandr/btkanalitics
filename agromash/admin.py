@@ -10,7 +10,7 @@ from django.utils import timezone
 import datetime
 from django.db.models import Count
 from django.conf import settings
-from django.http import Http404
+from django.http import Http404, HttpResponse
 from django.http import HttpResponseNotAllowed
 from django.shortcuts import redirect
 from django.urls import path, reverse
@@ -29,6 +29,10 @@ from .models import (
 
 from .tasks import parse_event_task, request_stop_parser
 from .tasks import send_report_now, send_report_range_now, send_email_report_now
+from .tasks import analyze_fuel_report_task
+from .tasks import generate_fuel_report_xlsx_cache
+from .tasks import is_task_active
+from .tasks import send_fuel_report_xlsx_to_subscribers
 
 from agromash.services.fuel_report_importer import FuelImportError, import_fuel_report_from_xlsx
 
@@ -508,7 +512,7 @@ class TelegramSubscriberAdminForm(forms.ModelForm):
     class Meta:
         model = TelegramSubscriber
         # Legacy JSON поле оставляем, но в админке не редактируем.
-        fields = ("chat_id", "username", "subscribed_monitors")
+        fields = ("chat_id", "username", "email", "subscribed_monitors")
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -527,10 +531,18 @@ class TelegramSubscriberAdminForm(forms.ModelForm):
 @admin.register(TelegramSubscriber)
 class TelegramSubscriberAdmin(admin.ModelAdmin):
     form = TelegramSubscriberAdminForm
-    list_display = ('chat_id', 'username', 'subscribed_at', 'subscribed_monitors_count', 'subscribed_monitors_preview')
+    list_display = (
+        'chat_id',
+        'username',
+        'email',
+        'subscribed_at',
+        'subscribed_monitors_count',
+        'subscribed_monitors_preview',
+    )
     search_fields = (
         'chat_id',
         'username',
+        'email',
         'subscribed_monitors__monitor_id',
         'subscribed_monitors__monitor_name',
     )
@@ -859,7 +871,38 @@ class FuelReportAdmin(admin.ModelAdmin):
     )
     list_filter = ("imported_ok", "period_start", "period_end")
     search_fields = ("contract_number", "organization_name", "source_filename", "source_sha256")
-    readonly_fields = ("created_at", "rows_count", "imported_ok", "import_error", "source_sha256")
+    readonly_fields = (
+        "created_at",
+        "rows_count",
+        "imported_ok",
+        "import_error",
+        "source_sha256",
+        "export_xlsx_status",
+        "export_xlsx_generated_at",
+        "export_xlsx_task_id",
+        "export_xlsx_error",
+    )
+
+    def get_queryset(self, request):
+        # В списке админки не вытаскиваем большие bytes XLSX из БД.
+        return super().get_queryset(request).defer("export_xlsx_content")
+
+    def get_list_display(self, request):
+        base = super().get_list_display(request)
+
+        def analyze_controls(obj: FuelReport):
+            return self._analyze_controls(request, obj)
+
+        def download_controls(obj: FuelReport):
+            return self._download_controls(request, obj)
+
+        def send_controls(obj: FuelReport):
+            return self._send_controls(request, obj)
+
+        analyze_controls.short_description = "Анализ"
+        download_controls.short_description = "Отчёт"
+        send_controls.short_description = "Отправка"
+        return (*base, analyze_controls, download_controls, send_controls)
 
     def get_urls(self):
         urls = super().get_urls()
@@ -869,8 +912,219 @@ class FuelReportAdmin(admin.ModelAdmin):
                 self.admin_site.admin_view(self.import_xlsx_view),
                 name="agromash_fuelreport_import_xlsx",
             ),
+            path(
+                "<path:object_id>/run-analysis/",
+                self.admin_site.admin_view(self.run_analysis_view),
+                name="agromash_fuelreport_run_analysis",
+            ),
+            path(
+                "<path:object_id>/download-xlsx/",
+                self.admin_site.admin_view(self.download_xlsx_view),
+                name="agromash_fuelreport_download_xlsx",
+            ),
+            path(
+                "<path:object_id>/enqueue-xlsx/",
+                self.admin_site.admin_view(self.enqueue_xlsx_view),
+                name="agromash_fuelreport_enqueue_xlsx",
+            ),
+            path(
+                "<path:object_id>/send-xlsx/",
+                self.admin_site.admin_view(self.send_xlsx_view),
+                name="agromash_fuelreport_send_xlsx",
+            ),
         ]
         return custom + urls
+
+    def changelist_view(self, request, extra_context=None):
+        extra_context = extra_context or {}
+        # Список подписчиков для модального окна отправки
+        extra_context["telegram_subscribers"] = (
+            TelegramSubscriber.objects.all().order_by("username", "chat_id")
+        )
+        # URL-шаблон, чтобы JS мог подставить report_id
+        extra_context["send_xlsx_url_template"] = reverse(
+            "admin:agromash_fuelreport_send_xlsx",
+            args=["__id__"],
+        )
+        return super().changelist_view(request, extra_context=extra_context)
+
+    def _analyze_controls(self, request, obj: FuelReport):
+        run_url = reverse("admin:agromash_fuelreport_run_analysis", args=[obj.pk])
+        return format_html(
+            '<div class="agromash-admin-action">'
+            '<button type="submit" class="button" formaction="{}" formmethod="post">Запустить</button>'
+            '<span class="agromash-admin-action-hint"></span>'
+            '</div>',
+            run_url,
+        )
+
+    def run_analysis_view(self, request, object_id):
+        if request.method != "POST":
+            return HttpResponseNotAllowed(["POST"])
+
+        report: FuelReport = self.get_object(request, object_id)
+        if report is None:
+            raise Http404("FuelReport not found")
+
+        try:
+            async_res = analyze_fuel_report_task.delay(report.id, source="admin")
+            self.message_user(
+                request,
+                f"Анализ поставлен в очередь Celery (report_id={report.id}, task_id={async_res.id})",
+                level=messages.SUCCESS,
+            )
+        except Exception:
+            logger.exception("Failed to enqueue analyze_fuel_report_task (report_id=%s)", report.id)
+            self.message_user(
+                request,
+                f"Не удалось поставить анализ в очередь Celery (report_id={report.id}) — см. логи",
+                level=messages.ERROR,
+            )
+
+        return redirect(request.META.get("HTTP_REFERER") or reverse("admin:agromash_fuelreport_changelist"))
+
+    def _download_controls(self, request, obj: FuelReport):
+        status = getattr(obj, "export_xlsx_status", FuelReport.EXPORT_STATUS_NONE)
+        download_url = reverse("admin:agromash_fuelreport_download_xlsx", args=[obj.pk])
+        enqueue_url = reverse("admin:agromash_fuelreport_enqueue_xlsx", args=[obj.pk])
+
+        if status == FuelReport.EXPORT_STATUS_READY and getattr(obj, "export_xlsx_generated_at", None):
+            return format_html(
+                '<div class="agromash-admin-action">'
+                '<a class="button" href="{}">Скачать XLSX</a>'
+                '<span class="agromash-admin-action-hint">готово</span>'
+                '</div>',
+                download_url,
+            )
+
+        if status == FuelReport.EXPORT_STATUS_PENDING and getattr(obj, "export_xlsx_task_id", None):
+            return format_html(
+                '<div class="agromash-admin-action">'
+                '<button type="submit" class="button" formaction="{}" formmethod="post" disabled>Генерация…</button>'
+                '<span class="agromash-admin-action-hint">в очереди</span>'
+                '</div>',
+                enqueue_url,
+            )
+
+        # none/error → предлагаем сгенерировать в фоне
+        suffix_html = "" if status != FuelReport.EXPORT_STATUS_ERROR else "ошибка"
+        return format_html(
+            '<div class="agromash-admin-action">'
+            '<button type="submit" class="button" formaction="{}" formmethod="post">Сформировать XLSX</button>'
+            '<span class="agromash-admin-action-hint">{}</span>'
+            '</div>',
+            enqueue_url,
+            suffix_html,
+        )
+
+    def enqueue_xlsx_view(self, request, object_id):
+        if request.method != "POST":
+            return HttpResponseNotAllowed(["POST"])
+
+        report: FuelReport = self.get_object(request, object_id)
+        if report is None:
+            raise Http404("FuelReport not found")
+
+        # Если уже есть активная таска — не плодим дубликаты
+        task_id = str(getattr(report, "export_xlsx_task_id", "") or "").strip()
+        if task_id and is_task_active(task_id):
+            self.message_user(
+                request,
+                f"XLSX уже формируется (task_id={task_id})",
+                level=messages.WARNING,
+            )
+            return redirect(request.META.get("HTTP_REFERER") or reverse("admin:agromash_fuelreport_changelist"))
+
+        try:
+            async_res = generate_fuel_report_xlsx_cache.delay(report.id, source="admin")
+        except Exception:
+            logger.exception("Failed to enqueue generate_fuel_report_xlsx_cache (report_id=%s)", report.id)
+            self.message_user(request, "Не удалось поставить задачу в очередь Celery — см. логи", level=messages.ERROR)
+            return redirect(request.META.get("HTTP_REFERER") or reverse("admin:agromash_fuelreport_changelist"))
+
+        FuelReport.objects.filter(pk=report.id).update(
+            export_xlsx_status=FuelReport.EXPORT_STATUS_PENDING,
+            export_xlsx_task_id=async_res.id,
+            export_xlsx_error="",
+            export_xlsx_content=None,
+            export_xlsx_generated_at=None,
+        )
+
+        self.message_user(
+            request,
+            f"Формирование XLSX поставлено в очередь Celery (report_id={report.id}, task_id={async_res.id})",
+            level=messages.SUCCESS,
+        )
+        return redirect(request.META.get("HTTP_REFERER") or reverse("admin:agromash_fuelreport_changelist"))
+
+    def _send_controls(self, request, obj: FuelReport):
+        # Кнопка открывает модальное окно в changelist (см. шаблон)
+        return format_html(
+            '<div class="agromash-admin-action">'
+            '<button type="button" class="button js-fuelreport-send" data-report-id="{}">Отправить…</button>'
+            '<span class="agromash-admin-action-hint"></span>'
+            '</div>',
+            obj.pk,
+        )
+
+    def send_xlsx_view(self, request, object_id):
+        if request.method != "POST":
+            return HttpResponseNotAllowed(["POST"])
+
+        report: FuelReport = self.get_object(request, object_id)
+        if report is None:
+            raise Http404("FuelReport not found")
+
+        raw_ids = request.POST.getlist("subscriber_ids")
+        subscriber_ids = []
+        for v in raw_ids:
+            try:
+                subscriber_ids.append(int(v))
+            except Exception:
+                continue
+
+        if not subscriber_ids:
+            self.message_user(request, "Не выбраны получатели", level=messages.ERROR)
+            return redirect(request.META.get("HTTP_REFERER") or reverse("admin:agromash_fuelreport_changelist"))
+
+        try:
+            async_res = send_fuel_report_xlsx_to_subscribers.delay(report.id, subscriber_ids, source="admin")
+            self.message_user(
+                request,
+                f"Отправка XLSX поставлена в очередь Celery (report_id={report.id}, task_id={async_res.id})",
+                level=messages.SUCCESS,
+            )
+        except Exception:
+            logger.exception("Failed to enqueue send_fuel_report_xlsx_to_subscribers (report_id=%s)", report.id)
+            self.message_user(request, "Не удалось поставить задачу в очередь Celery — см. логи", level=messages.ERROR)
+
+        return redirect(request.META.get("HTTP_REFERER") or reverse("admin:agromash_fuelreport_changelist"))
+
+    def download_xlsx_view(self, request, object_id):
+        # для скачивания достаточно GET
+        if request.method != "GET":
+            return HttpResponseNotAllowed(["GET"])
+
+        report: FuelReport = self.get_object(request, object_id)
+        if report is None:
+            raise Http404("FuelReport not found")
+
+        # Если файл уже сгенерирован в фоне — отдаём его без пересчёта.
+        if (
+            getattr(report, "export_xlsx_status", None) == FuelReport.EXPORT_STATUS_READY
+            and getattr(report, "export_xlsx_content", None)
+        ):
+            filename = f"fuel_report_{report.id}.xlsx"
+            resp = HttpResponse(
+                report.export_xlsx_content,
+                content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+            resp["Content-Disposition"] = f'attachment; filename="{filename}"'
+            return resp
+
+        # Иначе не блокируем HTTP — просим сначала сгенерировать.
+        self.message_user(request, "XLSX ещё не сформирован — нажмите «Сформировать XLSX» и обновите страницу", level=messages.WARNING)
+        return redirect(request.META.get("HTTP_REFERER") or reverse("admin:agromash_fuelreport_changelist"))
 
     def import_xlsx_view(self, request):
         if request.method == "GET":
@@ -922,6 +1176,7 @@ class FuelOperationAdmin(admin.ModelAdmin):
         "id",
         "report",
         "card_number",
+        "plate_identity",
         "operation_at",
         "product_name",
         "quantity",
@@ -929,6 +1184,9 @@ class FuelOperationAdmin(admin.ModelAdmin):
         "total_cost",
         "station_owner",
         "station_number",
+        "matched_alarms_count",
+        "matched_alarms_links",
+        "matched_alarm_snapshots_preview",
     )
     list_filter = ("station_owner", "product_name")
     search_fields = (
@@ -942,3 +1200,59 @@ class FuelOperationAdmin(admin.ModelAdmin):
     )
     autocomplete_fields = ("report",)
     date_hierarchy = "operation_at"
+
+    def matched_alarms_count(self, obj: FuelOperation) -> int:
+        return len(getattr(obj, "matched_alarms", None) or [])
+
+    matched_alarms_count.short_description = "Alarm (шт)"
+
+    def matched_alarms_links(self, obj: FuelOperation):
+        rows = (getattr(obj, "matched_alarms", None) or [])[:5]
+        pairs = []
+        for row in rows:
+            alarm_pk = row.get("id")
+            if not alarm_pk:
+                continue
+            label = row.get("alarm_id") or alarm_pk
+            url = reverse("admin:agromash_alarm_change", args=[alarm_pk])
+            pairs.append((url, label))
+
+        if not pairs:
+            return "-"
+
+        from django.utils.html import format_html_join
+
+        links = format_html_join(", ", '<a href="{}">{}</a>', pairs)
+        suffix = "" if len(getattr(obj, "matched_alarms", None) or []) <= 5 else " …"
+        return format_html("{}{}", links, suffix)
+
+    matched_alarms_links.short_description = "Alarm"
+
+    def matched_alarm_snapshots_preview(self, obj: FuelOperation):
+        """Превью снимков для совпавших тревог (через proxy view serve_snapshot).
+
+        `serve_snapshot` сам использует креды из `Alarm.account` (AccountVideoAnalytics).
+        """
+
+        rows = (getattr(obj, "matched_alarms", None) or [])[:3]
+        pairs = []
+        for row in rows:
+            alarm_id = row.get("alarm_id")
+            if not alarm_id:
+                continue
+            url = reverse("serve_snapshot", args=[alarm_id])
+            pairs.append((url, url))
+
+        if not pairs:
+            return "-"
+
+        from django.utils.html import format_html_join
+
+        # кликабельные превью
+        return format_html_join(
+            " ",
+            '<a href="{}" target="_blank"><img src="{}" style="height:60px;max-width:120px;object-fit:contain;" /></a>',
+            pairs,
+        )
+
+    matched_alarm_snapshots_preview.short_description = "Snapshots"

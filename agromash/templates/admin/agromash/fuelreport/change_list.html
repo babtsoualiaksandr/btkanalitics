@@ -1,5 +1,49 @@
 {% extends "admin/change_list.html" %}
 
+{% block extrahead %}
+  {{ block.super }}
+  <style>
+    #fuelreport-send-dialog {
+      width: min(900px, 92vw);
+      padding: 0;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+    }
+    #fuelreport-send-dialog .dlg-head {
+      padding: 12px 16px;
+      border-bottom: 1px solid #eee;
+      font-weight: 600;
+    }
+    #fuelreport-send-dialog .dlg-body {
+      padding: 12px 16px;
+    }
+    #fuelreport-send-dialog .dlg-foot {
+      padding: 12px 16px;
+      border-top: 1px solid #eee;
+      display: flex;
+      gap: 8px;
+      justify-content: flex-end;
+    }
+    .fuelreport-subs-list {
+      max-height: 45vh;
+      overflow: auto;
+      border: 1px solid #eee;
+      padding: 8px;
+      border-radius: 4px;
+      background: #fafafa;
+    }
+    .fuelreport-subs-item {
+      display: flex;
+      gap: 8px;
+      align-items: baseline;
+      padding: 4px 0;
+      border-bottom: 1px dashed #eee;
+    }
+    .fuelreport-subs-item:last-child { border-bottom: none; }
+    .fuelreport-subs-meta { color: #666; font-size: 12px; }
+  </style>
+{% endblock %}
+
 {% block object-tools-items %}
   <li>
     <a href="{% url 'admin:agromash_fuelreport_import_xlsx' %}" class="addlink">
@@ -9,3 +53,86 @@
   {{ block.super }}
 {% endblock %}
 
+{% block content %}
+  {{ block.super }}
+
+  <dialog id="fuelreport-send-dialog">
+    <form id="fuelreport-send-form" method="post">
+      {% csrf_token %}
+      <div class="dlg-head" id="fuelreport-send-title">Отправить XLSX</div>
+
+      <div class="dlg-body">
+        <p style="margin-top:0;">
+          Выберите получателей из <b>TelegramSubscriber</b>. Для каждого выбранного:
+          <br/>
+          - в Telegram будет отправлен документ (если есть chat_id)
+          <br/>
+          - на email будет отправлено письмо с вложением (если заполнен email)
+        </p>
+
+        <div class="fuelreport-subs-list">
+          {% for s in telegram_subscribers %}
+            <label class="fuelreport-subs-item">
+              <input type="checkbox" name="subscriber_ids" value="{{ s.id }}" />
+              <span>
+                <span><b>{{ s.username|default:"(no username)" }}</b></span>
+                <span class="fuelreport-subs-meta">chat_id={{ s.chat_id }}</span>
+                {% if s.email %}
+                  <span class="fuelreport-subs-meta">email={{ s.email }}</span>
+                {% endif %}
+              </span>
+            </label>
+          {% empty %}
+            <div style="color:#666;">Подписчиков пока нет</div>
+          {% endfor %}
+        </div>
+      </div>
+
+      <div class="dlg-foot">
+        <button type="button" class="button" id="fuelreport-send-cancel">Отмена</button>
+        <button type="submit" class="button default">Отправить</button>
+      </div>
+    </form>
+  </dialog>
+
+  {{ send_xlsx_url_template|json_script:"fuelreportSendUrlTemplate" }}
+
+  <script>
+    (function () {
+      const dlg = document.getElementById('fuelreport-send-dialog');
+      const form = document.getElementById('fuelreport-send-form');
+      const title = document.getElementById('fuelreport-send-title');
+      const btnCancel = document.getElementById('fuelreport-send-cancel');
+
+      function getUrlTemplate() {
+        try {
+          return JSON.parse(document.getElementById('fuelreportSendUrlTemplate').textContent);
+        } catch (e) {
+          return null;
+        }
+      }
+
+      document.addEventListener('click', function (e) {
+        const btn = e.target.closest('.js-fuelreport-send');
+        if (!btn) return;
+        e.preventDefault();
+
+        const reportId = btn.getAttribute('data-report-id');
+        const tpl = getUrlTemplate();
+        if (tpl && reportId) {
+          form.action = tpl.replace('__id__', reportId);
+          title.textContent = 'Отправить XLSX (FuelReport #' + reportId + ')';
+          if (dlg && typeof dlg.showModal === 'function') {
+            dlg.showModal();
+          }
+        }
+      });
+
+      if (btnCancel) {
+        btnCancel.addEventListener('click', function () {
+          if (dlg) dlg.close();
+        });
+      }
+    })();
+  </script>
+{% endblock %}

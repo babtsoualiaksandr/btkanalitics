@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 class AgromashConfig(AppConfig):
     name = 'agromash'
     default_auto_field = 'django.db.models.BigAutoField'
+    verbose_name = 'Настройки Парсера Аналитики'
 
     def ready(self):
         import agromash.signals

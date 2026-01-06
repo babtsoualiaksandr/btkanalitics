@@ -210,7 +210,7 @@ def admin_systemd_log(request):
     return JsonResponse(_journal_tail(unit=unit, lines=100))
 
 
-@csrf_exempt
+@staff_member_required
 def serve_snapshot(request, alarm_id):
     """
     View для отображения изображения с использованием Bearer токена

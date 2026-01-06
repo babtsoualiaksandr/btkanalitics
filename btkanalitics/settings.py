@@ -60,7 +60,7 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-    'agromash',
+    'agromash.apps.AgromashConfig',
 ]
 
 MIDDLEWARE = [

@@ -100,6 +100,13 @@ class TelegramSubscriber(models.Model):
         through='TelegramSubscriberMonitorSubscription',
     )
     username = models.CharField(max_length=255, blank=True, null=True)
+    email = models.EmailField(
+        blank=True,
+        null=True,
+        db_index=True,
+        verbose_name="Email",
+        help_text="Если задан — может использоваться для ручной отправки отчётов.",
+    )
     subscribed_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
@@ -334,6 +341,30 @@ class FuelReport(models.Model):
     imported_ok = models.BooleanField(default=True, db_index=True)
     import_error = models.TextField(blank=True)
 
+    # --- Экспорт (кэш XLSX, чтобы не блокировать админку долгой генерацией) ---
+    EXPORT_STATUS_NONE = "none"
+    EXPORT_STATUS_PENDING = "pending"
+    EXPORT_STATUS_READY = "ready"
+    EXPORT_STATUS_ERROR = "error"
+    EXPORT_STATUS_CHOICES = (
+        (EXPORT_STATUS_NONE, "Not generated"),
+        (EXPORT_STATUS_PENDING, "Generating"),
+        (EXPORT_STATUS_READY, "Ready"),
+        (EXPORT_STATUS_ERROR, "Error"),
+    )
+
+    export_xlsx_status = models.CharField(
+        max_length=16,
+        choices=EXPORT_STATUS_CHOICES,
+        default=EXPORT_STATUS_NONE,
+        db_index=True,
+    )
+    export_xlsx_task_id = models.CharField(max_length=255, blank=True)
+    export_xlsx_generated_at = models.DateTimeField(null=True, blank=True)
+    export_xlsx_error = models.TextField(blank=True)
+    # bytes готового файла (в БД, чтобы не требовать MEDIA_ROOT)
+    export_xlsx_content = models.BinaryField(null=True, blank=True, editable=False)
+
     class Meta:
         ordering = ('-created_at',)
 
@@ -379,6 +410,27 @@ class FuelOperation(models.Model):
 
     driver_name = models.CharField(max_length=255, blank=True)
     vehicle_number = models.CharField(max_length=64, blank=True)
+
+    # --- Анализ (обогащение) ---
+    plate_identity = models.ForeignKey(
+        'PlateIdentity',
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='fuel_operations',
+        help_text="Связанный PlateIdentity, подобранный по card_number -> owner_middle_name",
+    )
+    matched_alarms = models.JSONField(
+        default=list,
+        blank=True,
+        help_text="Список совпавших Alarm (в пределах окна времени). Формат: [{id, alarm_id, start_time, start_time_iso, delta_seconds}]",
+    )
+    matched_alarm_snapshot_urls = models.JSONField(
+        default=list,
+        blank=True,
+        help_text="Список URL/путей на снимки Alarm.original_quality_snapshot для matched_alarms (best-effort).",
+    )
+    analyzed_at = models.DateTimeField(null=True, blank=True, db_index=True)
 
     class Meta:
         ordering = ('-operation_at',)

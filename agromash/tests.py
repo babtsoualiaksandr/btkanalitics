@@ -15,7 +15,8 @@ from agromash.services.reporting import get_alarms_for_subscription
 from agromash.va_api_client import VAApiClient
 from agromash.tasks import send_email_report_now
 from agromash.services.fuel_report_importer import import_fuel_report_from_xlsx
-from agromash.models import FuelReport, FuelOperation
+from agromash.models import FuelReport, FuelOperation, PlateIdentity
+from agromash.services.fuel_report_analyzer import analyze_fuel_report
 
 
 class _FakeResponse:
@@ -440,3 +441,121 @@ class FuelReportImportTest(TestCase):
 
         op2 = FuelOperation.objects.order_by('operation_at').last()
         self.assertEqual(op2.card_number, "802003108")
+
+
+class FuelReportAnalyzeTest(TestCase):
+    def test_analyze_fuel_report_links_plate_identity_and_alarms_in_time_window(self):
+        report = FuelReport.objects.create(contract_number="c")
+        op_dt = timezone.now().replace(microsecond=0)
+        op = FuelOperation.objects.create(
+            report=report,
+            card_number="802003108",
+            department_number="",
+            operation_at=op_dt,
+        )
+
+        # PlateIdentity: owner_middle_name == card_number
+        pi = PlateIdentity.objects.create(
+            number="5189EC6",
+            state="BY",
+            owner_middle_name="802003108",
+            owner_last_name="Даньков",
+            owner_first_name="А.",
+        )
+
+        acc = AccountVideoAnalytics.objects.create(
+            name="n",
+            password="p",
+            contract="c",
+            organization="o",
+        )
+
+        alarm_dt = op_dt + datetime.timedelta(minutes=7)
+        alarm_ms = int(alarm_dt.timestamp() * 1000)
+        alarm = Alarm.objects.create(
+            monitor_id=1,
+            monitor_name="m",
+            alarm_id="a1",
+            topic="PlateMatched",
+            start_time=alarm_ms,
+            end_time=alarm_ms,
+            event_id=1,
+            plate_identities=[
+                {
+                    "list": {"id": 104, "name": "БУЭС", "level": 1},
+                    "plates": [
+                        {
+                            "id": 1021,
+                            "state": "BY",
+                            "number": "5189EC6",
+                            "owner_last_name": "Даньков",
+                            "owner_first_name": "А.",
+                            "owner_middle_name": "802003108",
+                        }
+                    ],
+                }
+            ],
+            data={"topic": "PlateMatched"},
+            account=acc,
+        )
+
+        summary = analyze_fuel_report(report_id=report.id, window_minutes=10)
+        self.assertEqual(summary.operations_total, 1)
+        self.assertEqual(summary.operations_with_plate_identity, 1)
+        self.assertEqual(summary.operations_with_alarms, 1)
+
+        op.refresh_from_db()
+        self.assertEqual(op.plate_identity_id, pi.id)
+        self.assertEqual(len(op.matched_alarms or []), 1)
+        self.assertEqual(op.matched_alarms[0].get("id"), alarm.id)
+
+    def test_analyze_fuel_report_does_not_match_alarms_outside_window(self):
+        report = FuelReport.objects.create(contract_number="c")
+        op_dt = timezone.now().replace(microsecond=0)
+        op = FuelOperation.objects.create(
+            report=report,
+            card_number="802003108",
+            department_number="",
+            operation_at=op_dt,
+        )
+        PlateIdentity.objects.create(
+            number="5189EC6",
+            state="BY",
+            owner_middle_name="802003108",
+        )
+
+        acc = AccountVideoAnalytics.objects.create(
+            name="n",
+            password="p",
+            contract="c",
+            organization="o",
+        )
+
+        # 30 минут разницы => не должно совпасть
+        alarm_dt = op_dt + datetime.timedelta(minutes=30)
+        alarm_sec = int(alarm_dt.timestamp())
+        Alarm.objects.create(
+            monitor_id=1,
+            monitor_name="m",
+            alarm_id="a1",
+            topic="PlateMatched",
+            start_time=alarm_sec,
+            end_time=alarm_sec,
+            event_id=1,
+            plate_identities=[
+                {
+                    "list": {"id": 104, "name": "БУЭС", "level": 1},
+                    "plates": [{"id": 1021, "state": "BY", "number": "5189EC6", "owner_middle_name": "802003108"}],
+                }
+            ],
+            data={"topic": "PlateMatched"},
+            account=acc,
+        )
+
+        summary = analyze_fuel_report(report_id=report.id, window_minutes=10)
+        self.assertEqual(summary.operations_total, 1)
+        self.assertEqual(summary.operations_with_plate_identity, 1)
+        self.assertEqual(summary.operations_with_alarms, 0)
+
+        op.refresh_from_db()
+        self.assertEqual(op.matched_alarms, [])

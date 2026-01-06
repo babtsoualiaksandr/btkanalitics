@@ -11,7 +11,9 @@ from django.db.models import Q
 from django.utils import timezone
 from django.core.mail import EmailMessage
 
-from agromash.models import AccountVideoAnalytics, ReportRunLog, TelegramReportSubscription
+from agromash.models import AccountVideoAnalytics, FuelReport, ReportRunLog, TelegramReportSubscription, TelegramSubscriber
+from agromash.services.fuel_report_analyzer import analyze_fuel_report
+from agromash.services.fuel_report_exporter import export_fuel_report_to_xlsx_bytes
 from agromash.services.parse_event_runner import ParserRunContext, run_parse_event
 from agromash.services.report_scheduler import compute_next_run_at
 from agromash.services.reporting import generate_report_attachments, generate_report_attachments_for_range
@@ -19,6 +21,233 @@ from agromash.services.telegram_client import send_document, send_message
 
 
 logger = logging.getLogger(__name__)
+
+
+@shared_task(bind=True, name="agromash.analyze_fuel_report")
+def analyze_fuel_report_task(self, report_id: int, source: str = "admin") -> None:
+    """Celery-задача: выполнить анализ FuelOperation для конкретного FuelReport."""
+    t0 = time.monotonic()
+    try:
+        summary = analyze_fuel_report(report_id=report_id, window_minutes=10)
+        logger.info(
+            "analyze_fuel_report done report_id=%s updated=%s with_pi=%s with_alarms=%s alarms_candidates=%s source=%s task_id=%s elapsed_ms=%s",
+            report_id,
+            summary.operations_updated,
+            summary.operations_with_plate_identity,
+            summary.operations_with_alarms,
+            summary.alarms_candidates,
+            source,
+            getattr(getattr(self, "request", None), "id", None),
+            int((time.monotonic() - t0) * 1000),
+        )
+    except Exception:
+        logger.exception(
+            "analyze_fuel_report failed report_id=%s source=%s task_id=%s",
+            report_id,
+            source,
+            getattr(getattr(self, "request", None), "id", None),
+        )
+        raise
+
+
+@shared_task(bind=True, name="agromash.send_fuel_report_xlsx_to_subscribers")
+def send_fuel_report_xlsx_to_subscribers(
+    self,
+    report_id: int,
+    subscriber_ids: list[int],
+    source: str = "admin",
+) -> None:
+    """Сформировать XLSX по FuelReport и отправить выбранным TelegramSubscriber.
+
+    Отправка делается:
+      - в Telegram (document), если у подписчика есть chat_id
+      - на email, если у подписчика задан TelegramSubscriber.email
+    """
+
+    started_at = timezone.now()
+    t0 = time.monotonic()
+
+    report = FuelReport.objects.filter(pk=report_id).first()
+    if not report:
+        logger.warning("send_fuel_report_xlsx_to_subscribers: report not found (report_id=%s)", report_id)
+        return
+
+    subs = list(
+        TelegramSubscriber.objects.filter(pk__in=list(subscriber_ids)).order_by("id")
+    )
+    if not subs:
+        logger.warning(
+            "send_fuel_report_xlsx_to_subscribers: empty subscribers (report_id=%s)",
+            report_id,
+        )
+        return
+
+    try:
+        content = export_fuel_report_to_xlsx_bytes(report_id=report.id)
+    except Exception:
+        logger.exception(
+            "send_fuel_report_xlsx_to_subscribers: export failed (report_id=%s)",
+            report.id,
+        )
+        return
+
+    filename = f"fuel_report_{report.id}.xlsx"
+    caption = f"FuelReport #{report.id}"
+    if report.period_start and report.period_end:
+        caption += f"\nПериод: {report.period_start}..{report.period_end}"
+    if report.contract_number:
+        caption += f"\nДоговор: {report.contract_number}"
+
+    meta = {
+        "source": source,
+        "report_id": report.id,
+        "task_id": getattr(getattr(self, "request", None), "id", None),
+    }
+
+    attachments = [
+        (
+            filename,
+            content,
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+    ]
+
+    # best-effort: ошибки конкретного получателя не должны ронять остальные
+    for sub in subs:
+        # Telegram
+        if getattr(sub, "chat_id", None):
+            run_log = ReportRunLog.objects.create(
+                subscription=None,
+                subscriber=sub,
+                started_at=started_at,
+                channel=ReportRunLog.CHANNEL_TELEGRAM,
+            )
+            try:
+                send_document(
+                    chat_id=int(sub.chat_id),
+                    filename=filename,
+                    content=content,
+                    mime_type=attachments[0][2],
+                    caption=caption,
+                    meta={**meta, "subscriber_id": sub.id},
+                )
+                run_log.finished_at = timezone.now()
+                run_log.duration_ms = int((time.monotonic() - t0) * 1000)
+                run_log.ok = True
+                run_log.error = ""
+                run_log.attachments_count = 1
+                run_log.save(
+                    update_fields=[
+                        "finished_at",
+                        "duration_ms",
+                        "ok",
+                        "error",
+                        "attachments_count",
+                    ]
+                )
+            except Exception:
+                logger.exception(
+                    "send_fuel_report_xlsx_to_subscribers: telegram send failed (report_id=%s, subscriber_id=%s)",
+                    report.id,
+                    sub.id,
+                )
+                run_log.finished_at = timezone.now()
+                run_log.duration_ms = int((time.monotonic() - t0) * 1000)
+                run_log.ok = False
+                run_log.error = "exception"
+                run_log.save(update_fields=["finished_at", "duration_ms", "ok", "error"])
+
+        # Email
+        if getattr(sub, "email", None):
+            run_log = ReportRunLog.objects.create(
+                subscription=None,
+                subscriber=sub,
+                started_at=started_at,
+                channel=ReportRunLog.CHANNEL_EMAIL,
+            )
+            try:
+                subject = f"Fuel report #{report.id}"
+                _send_email_with_attachments(
+                    to_email=str(sub.email),
+                    subject=subject,
+                    body=caption,
+                    attachments=attachments,
+                )
+                run_log.finished_at = timezone.now()
+                run_log.duration_ms = int((time.monotonic() - t0) * 1000)
+                run_log.ok = True
+                run_log.error = ""
+                run_log.attachments_count = 1
+                run_log.save(
+                    update_fields=[
+                        "finished_at",
+                        "duration_ms",
+                        "ok",
+                        "error",
+                        "attachments_count",
+                    ]
+                )
+            except Exception:
+                logger.exception(
+                    "send_fuel_report_xlsx_to_subscribers: email send failed (report_id=%s, subscriber_id=%s, email=%s)",
+                    report.id,
+                    sub.id,
+                    sub.email,
+                )
+                run_log.finished_at = timezone.now()
+                run_log.duration_ms = int((time.monotonic() - t0) * 1000)
+                run_log.ok = False
+                run_log.error = "exception"
+                run_log.save(update_fields=["finished_at", "duration_ms", "ok", "error"])
+
+
+@shared_task(bind=True, name="agromash.generate_fuel_report_xlsx_cache")
+def generate_fuel_report_xlsx_cache(self, report_id: int, source: str = "admin") -> None:
+    """Сформировать XLSX по FuelReport в фоне и сохранить bytes в FuelReport.export_xlsx_content."""
+
+    t0 = time.monotonic()
+    task_id = getattr(getattr(self, "request", None), "id", None)
+
+    report = FuelReport.objects.filter(pk=report_id).first()
+    if not report:
+        logger.warning("generate_fuel_report_xlsx_cache: report not found report_id=%s", report_id)
+        return
+
+    # Отмечаем, что генерация начата (чтобы админка могла показать статус сразу)
+    FuelReport.objects.filter(pk=report_id).update(
+        export_xlsx_status=FuelReport.EXPORT_STATUS_PENDING,
+        export_xlsx_task_id=str(task_id or ""),
+        export_xlsx_error="",
+    )
+
+    try:
+        content = export_fuel_report_to_xlsx_bytes(report_id=report_id)
+        FuelReport.objects.filter(pk=report_id).update(
+            export_xlsx_status=FuelReport.EXPORT_STATUS_READY,
+            export_xlsx_generated_at=timezone.now(),
+            export_xlsx_error="",
+            export_xlsx_content=content,
+        )
+        logger.info(
+            "generate_fuel_report_xlsx_cache done report_id=%s source=%s task_id=%s elapsed_ms=%s size=%s",
+            report_id,
+            source,
+            task_id,
+            int((time.monotonic() - t0) * 1000),
+            len(content or b""),
+        )
+    except Exception as e:
+        logger.exception(
+            "generate_fuel_report_xlsx_cache failed report_id=%s source=%s task_id=%s",
+            report_id,
+            source,
+            task_id,
+        )
+        FuelReport.objects.filter(pk=report_id).update(
+            export_xlsx_status=FuelReport.EXPORT_STATUS_ERROR,
+            export_xlsx_error=str(e),
+        )
+        return
 
 
 @shared_task(bind=True, name="agromash.send_report_now")
