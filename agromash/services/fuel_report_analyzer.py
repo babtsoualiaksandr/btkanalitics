@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime
 import logging
+import bisect
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any, DefaultDict, Dict, Iterable, List, Optional, Tuple
@@ -44,6 +45,25 @@ def _iter_alarm_plate_numbers(alarm: Alarm) -> Iterable[str]:
             yield num
 
 
+def _iter_alarm_plate_objects(alarm: Alarm) -> Iterable[Dict[str, Any]]:
+    """Из Alarm.plate_identities извлечь plate-объекты (для сохранения в FuelOperation.fallback_plate_numbers).
+
+    Формат plate (пример):
+      {"id": 1028, "state": "BY", "number": "AM18676", "owner_last_name": "...", ...}
+    """
+    for _list_info, plate in iter_plate_identities(getattr(alarm, "plate_identities", None)):
+        if not isinstance(plate, dict):
+            continue
+        yield {
+            "id": plate.get("id"),
+            "state": plate.get("state"),
+            "number": plate.get("number"),
+            "owner_last_name": plate.get("owner_last_name"),
+            "owner_first_name": plate.get("owner_first_name"),
+            "owner_middle_name": plate.get("owner_middle_name"),
+        }
+
+
 @dataclass(frozen=True)
 class FuelReportAnalyzeSummary:
     report_id: int
@@ -60,18 +80,23 @@ def analyze_fuel_report(*, report_id: int, window_minutes: int = 10) -> FuelRepo
     Логика:
       1) для каждой FuelOperation подбираем PlateIdentity по связке:
          FuelOperation.card_number == PlateIdentity.owner_middle_name
-      2) по PlateIdentity.number подбираем Alarm, у которых в plate_identities есть
-         этот номер, и Alarm.start_time попадает в окно +/- window_minutes относительно
-         FuelOperation.operation_at
+      2) для каждой FuelOperation подбираем Alarm по условиям:
+         - Alarm.monitor_name_second_token == FuelOperation.station_number
+         - Alarm.start_time попадает в окно +/- window_minutes относительно FuelOperation.operation_at
+         - приоритет: если FuelOperation.card_number входит в список owner_middle_name внутри Alarm.plate_identities,
+           то выбираем только такие Alarm; иначе используем match только по station/time.
+
+     Для ускорения выборки Alarm используем период FuelReport.period_start/period_end
+     (если задан), иначе вычисляем границы по времени операций FuelOperation.
 
     Результат пишется обратно в FuelOperation поля:
       - plate_identity (FK)
-      - matched_alarms (JSON list)
+      - matched_alarms (JSON list, также содержит snapshot_url best-effort)
       - analyzed_at (datetime)
     """
 
-    report_exists = FuelReport.objects.filter(pk=report_id).exists()
-    if not report_exists:
+    report = FuelReport.objects.filter(pk=report_id).only("id", "period_start", "period_end").first()
+    if not report:
         logger.warning("analyze_fuel_report: report not found report_id=%s", report_id)
         return FuelReportAnalyzeSummary(
             report_id=report_id,
@@ -97,17 +122,30 @@ def analyze_fuel_report(*, report_id: int, window_minutes: int = 10) -> FuelRepo
     window = datetime.timedelta(minutes=int(window_minutes))
     now = timezone.now()
 
-    # 1) диапазон времени по операциям (чтобы ограничить выборку Alarm)
-    bounds = ops_qs.aggregate(min_dt=Min("operation_at"), max_dt=Max("operation_at"))
-    min_dt = bounds.get("min_dt")
-    max_dt = bounds.get("max_dt")
-    if not min_dt or not max_dt:
-        # странно, но на всякий случай
-        min_dt = now
-        max_dt = now
-
-    start_dt = _ensure_aware_utc(min_dt) - window
-    end_dt = _ensure_aware_utc(max_dt) + window
+    # 1) диапазон времени для выборки Alarm
+    #    Пытаемся использовать FuelReport.period_start/period_end (date), иначе — по времени операций.
+    if getattr(report, "period_start", None) and getattr(report, "period_end", None):
+        tz = timezone.get_current_timezone()
+        start_local = timezone.make_aware(
+            datetime.datetime.combine(report.period_start, datetime.time.min),
+            timezone=tz,
+        )
+        end_local = timezone.make_aware(
+            datetime.datetime.combine(report.period_end, datetime.time.max),
+            timezone=tz,
+        )
+        start_dt = _ensure_aware_utc(start_local) - window
+        end_dt = _ensure_aware_utc(end_local) + window
+    else:
+        bounds = ops_qs.aggregate(min_dt=Min("operation_at"), max_dt=Max("operation_at"))
+        min_dt = bounds.get("min_dt")
+        max_dt = bounds.get("max_dt")
+        if not min_dt or not max_dt:
+            # странно, но на всякий случай
+            min_dt = now
+            max_dt = now
+        start_dt = _ensure_aware_utc(min_dt) - window
+        end_dt = _ensure_aware_utc(max_dt) + window
 
     start_sec = int(start_dt.timestamp())
     end_sec = int(end_dt.timestamp())
@@ -133,35 +171,69 @@ def analyze_fuel_report(*, report_id: int, window_minutes: int = 10) -> FuelRepo
             if key and key not in pi_by_card:
                 pi_by_card[key] = pi
 
-    # 3) кандидатные Alarm за общий диапазон, собираем индекс plate_number -> alarms
+    # 3) список station_number из операций (для потенциальной оптимизации/статистики)
+    station_numbers: List[str] = []
+    for v in ops_qs.values_list("station_number", flat=True).distinct().iterator():
+        s = str(v or "").strip()
+        if s:
+            station_numbers.append(s)
+    station_numbers = list(dict.fromkeys(station_numbers))
+    station_numbers_set = set(station_numbers)
+
+    # 4) кандидатные Alarm за общий диапазон, собираем индекс monitor_name_second_token -> alarms
     alarms_q = (
         Alarm.objects.filter(topic="PlateMatched")
-        .exclude(plate_identities__isnull=True)
         .filter(
             Q(start_time__gte=start_sec, start_time__lte=end_sec)
             | Q(start_time__gte=start_ms, start_time__lte=end_ms)
         )
-        .only("id", "alarm_id", "start_time", "plate_identities", "original_quality_snapshot")
+        .only(
+            "id",
+            "alarm_id",
+            "start_time",
+            "monitor_name",
+            "plate_identities",
+            "original_quality_snapshot",
+        )
     )
 
-    alarms_by_plate: DefaultDict[str, List[Tuple[Alarm, datetime.datetime]]] = defaultdict(list)
+    alarms_by_station: DefaultDict[str, List[Tuple[Alarm, datetime.datetime, set[str]]]] = defaultdict(list)
     alarms_candidates = 0
     for alarm in alarms_q.iterator(chunk_size=2000):
         alarms_candidates += 1
         alarm_dt = _alarm_ts_to_aware_utc(alarm.start_time)
         if not alarm_dt:
             continue
-        for plate_number in _iter_alarm_plate_numbers(alarm):
-            alarms_by_plate[plate_number].append((alarm, alarm_dt))
 
-    # 4) обновляем операции батчами
+        token = str(getattr(alarm, "monitor_name_second_token", "") or "").strip()
+        if token and (not station_numbers_set or token in station_numbers_set):
+            owners: set[str] = set()
+            for _list_info, p in iter_plate_identities(getattr(alarm, "plate_identities", None)):
+                om = str((p or {}).get("owner_middle_name") or "").strip()
+                if om:
+                    owners.add(om)
+            alarms_by_station[token].append((alarm, alarm_dt, owners))
+
+    # Индексы по времени внутри каждой станции для быстрого поиска окна.
+    alarms_by_station_dts: Dict[str, List[datetime.datetime]] = {}
+    for station, pairs in alarms_by_station.items():
+        pairs.sort(key=lambda p: p[1])
+        alarms_by_station_dts[station] = [dt for _a, dt, _owners in pairs]
+
+    # 5) обновляем операции батчами
     updated = 0
     with_pi = 0
     with_alarms = 0
     batch: List[FuelOperation] = []
 
     ops_iter = (
-        ops_qs.only("id", "card_number", "operation_at")
+        ops_qs.only(
+            "id",
+            "card_number",
+            "operation_at",
+            "station_number",
+            "fallback_plate_numbers",
+        )
         .select_related(None)
         .iterator(chunk_size=2000)
     )
@@ -176,23 +248,47 @@ def analyze_fuel_report(*, report_id: int, window_minutes: int = 10) -> FuelRepo
         op_dt = _ensure_aware_utc(op.operation_at)
 
         matched_rows: List[Dict[str, Any]] = []
-        snapshot_urls: List[str] = []
-        if pi and pi.number:
-            for alarm, alarm_dt in alarms_by_plate.get(str(pi.number).strip().upper(), []):
+        # key -> plate dict
+        fallback_plate_numbers_map: Dict[str, Dict[str, Any]] = {}
+
+        station = str(getattr(op, "station_number", "") or "").strip()
+        pairs = alarms_by_station.get(station) if station else None
+        if pairs:
+            start_w = op_dt - window
+            end_w = op_dt + window
+            dts = alarms_by_station_dts.get(station) or []
+            left = bisect.bisect_left(dts, start_w)
+            right = bisect.bisect_right(dts, end_w)
+
+            strict_rows: List[Dict[str, Any]] = []
+            loose_rows: List[Dict[str, Any]] = []
+
+            for alarm, alarm_dt, owners in pairs[left:right]:
                 delta = abs((alarm_dt - op_dt).total_seconds())
-                if delta <= window.total_seconds():
-                    matched_rows.append(
-                        {
-                            "id": alarm.id,
-                            "alarm_id": alarm.alarm_id,
-                            "start_time": alarm.start_time,
-                            "start_time_iso": alarm_dt.isoformat(),
-                            "delta_seconds": int(delta),
-                        }
-                    )
-                    snap = getattr(alarm, "original_quality_snapshot", None)
-                    if snap:
-                        snapshot_urls.append(str(snap))
+                snap = getattr(alarm, "original_quality_snapshot", None)
+                if not pi:
+                    for plate_obj in _iter_alarm_plate_objects(alarm):
+                        num_key = normalize_plate_number(str(plate_obj.get("number") or ""))
+                        owner_key = str(plate_obj.get("owner_middle_name") or "").strip()
+                        key = f"{owner_key}|{num_key}" if owner_key or num_key else ""
+                        if key and key not in fallback_plate_numbers_map:
+                            fallback_plate_numbers_map[key] = plate_obj
+
+                row = {
+                    "id": alarm.id,
+                    "alarm_id": alarm.alarm_id,
+                    "start_time": alarm.start_time,
+                    "start_time_iso": alarm_dt.isoformat(),
+                    "delta_seconds": int(delta),
+                    "snapshot_url": str(snap) if snap else "",
+                }
+
+                if card and owners and card in owners:
+                    strict_rows.append(row)
+                else:
+                    loose_rows.append(row)
+
+            matched_rows = strict_rows if strict_rows else loose_rows
 
         if matched_rows:
             with_alarms += 1
@@ -201,14 +297,27 @@ def analyze_fuel_report(*, report_id: int, window_minutes: int = 10) -> FuelRepo
         matched_rows.sort(key=lambda r: (r.get("delta_seconds", 0), r.get("start_time", 0)))
         op.matched_alarms = matched_rows
         # best-effort: список URL/путей на original_quality_snapshot для совпавших тревог
+        snapshot_urls = [str(r.get("snapshot_url") or "") for r in matched_rows]
         op.matched_alarm_snapshot_urls = snapshot_urls
+
+        # Fallback номера: заполняем только если PlateIdentity не подобран.
+        if not pi and fallback_plate_numbers_map:
+            op.fallback_plate_numbers = [fallback_plate_numbers_map[k] for k in sorted(fallback_plate_numbers_map.keys())]
+        else:
+            op.fallback_plate_numbers = []
         op.analyzed_at = now
 
         batch.append(op)
         if len(batch) >= 1000:
             FuelOperation.objects.bulk_update(
                 batch,
-                ["plate_identity", "matched_alarms", "matched_alarm_snapshot_urls", "analyzed_at"],
+                [
+                    "plate_identity",
+                    "matched_alarms",
+                    "matched_alarm_snapshot_urls",
+                    "fallback_plate_numbers",
+                    "analyzed_at",
+                ],
                 batch_size=1000,
             )
             updated += len(batch)
@@ -217,7 +326,13 @@ def analyze_fuel_report(*, report_id: int, window_minutes: int = 10) -> FuelRepo
     if batch:
         FuelOperation.objects.bulk_update(
             batch,
-            ["plate_identity", "matched_alarms", "matched_alarm_snapshot_urls", "analyzed_at"],
+            [
+                "plate_identity",
+                "matched_alarms",
+                "matched_alarm_snapshot_urls",
+                "fallback_plate_numbers",
+                "analyzed_at",
+            ],
             batch_size=1000,
         )
         updated += len(batch)

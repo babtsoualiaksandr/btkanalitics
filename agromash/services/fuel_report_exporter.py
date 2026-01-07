@@ -12,6 +12,50 @@ from agromash.models import Alarm, FuelOperation
 from agromash.va_api_client import VAApiClient
 
 
+# Порядок/набор доступных колонок XLSX.
+# `default=True` => включаем по умолчанию (кроме snapshot-колонок).
+FUEL_REPORT_XLSX_COLUMNS: list[dict[str, Any]] = [
+    {"key": "operation_at", "header": "Дата/время операции", "width": 19, "default": True, "align": "center"},
+    {"key": "card_number", "header": "Карта (card_number)", "width": 14, "default": True, "align": "center"},
+    {"key": "department_number", "header": "Подразделение", "width": 12, "default": True, "align": "center"},
+    {"key": "product_name", "header": "Товар", "width": 20, "default": True, "align": "center"},
+    {"key": "product_code", "header": "Код", "width": 10, "default": True, "align": "center"},
+    {"key": "quantity", "header": "Количество", "width": 11, "default": True, "align": "center"},
+    {"key": "unit", "header": "Ед.", "width": 6, "default": True, "align": "center"},
+    {"key": "total_cost", "header": "Стоимость всего", "width": 14, "default": True, "align": "center"},
+    {"key": "station_owner", "header": "АЗС (владелец)", "width": 16, "default": True, "align": "center"},
+    {"key": "station_number", "header": "АЗС (номер)", "width": 10, "default": True, "align": "center"},
+    {"key": "driver_name", "header": "Водитель", "width": 16, "default": True, "align": "center"},
+    {"key": "vehicle_number", "header": "ТС", "width": 12, "default": True, "align": "center"},
+
+    {"key": "pi_number", "header": "Номер авто (PlateIdentity)", "width": 14, "default": True, "align": "center"},
+    {"key": "pi_state", "header": "Гос.регион", "width": 10, "default": True, "align": "center"},
+    {"key": "pi_owner_last", "header": "Владелец (Ф)", "width": 16, "default": True, "align": "center"},
+    {"key": "pi_owner_first", "header": "Владелец (И)", "width": 12, "default": True, "align": "center"},
+    {"key": "pi_owner_middle", "header": "Владелец (О/card)", "width": 14, "default": True, "align": "center"},
+    {"key": "pi_list_name", "header": "Список", "width": 14, "default": True, "align": "center"},
+    {"key": "pi_list_level", "header": "Уровень", "width": 8, "default": True, "align": "center"},
+
+    {"key": "fallback_plates", "header": "Fallback plates", "width": 34, "default": True, "align": "leftwrap"},
+    {"key": "alarms_count", "header": "Alarm (шт)", "width": 9, "default": True, "align": "center"},
+    {"key": "alarms_refs", "header": "Alarm (id@time)", "width": 40, "default": True, "align": "leftwrap"},
+
+    # snapshots (по умолчанию выключены)
+    {"key": "snapshot_1", "header": "Snapshot 1", "width": 30, "default": False, "align": "center", "kind": "image"},
+    {"key": "snapshot_2", "header": "Snapshot 2", "width": 30, "default": False, "align": "center", "kind": "image"},
+    {"key": "snapshot_3", "header": "Snapshot 3", "width": 30, "default": False, "align": "center", "kind": "image"},
+    {"key": "snapshot_url_1", "header": "Snapshot URL 1", "width": 44, "default": False, "align": "leftwrap", "kind": "url"},
+    {"key": "snapshot_url_2", "header": "Snapshot URL 2", "width": 44, "default": False, "align": "leftwrap", "kind": "url"},
+    {"key": "snapshot_url_3", "header": "Snapshot URL 3", "width": 44, "default": False, "align": "leftwrap", "kind": "url"},
+
+    {"key": "analyzed_at", "header": "Проанализировано", "width": 19, "default": True, "align": "center"},
+]
+
+
+def default_fuel_report_xlsx_column_keys() -> list[str]:
+    return [c["key"] for c in FUEL_REPORT_XLSX_COLUMNS if c.get("default")]
+
+
 def _to_local_str(dt: Optional[datetime.datetime]) -> str:
     if not dt:
         return ""
@@ -64,6 +108,36 @@ def _format_alarm_ref(alarm: dict[str, Any]) -> str:
     return f"{alarm_id}@{started}" if started else f"{alarm_id}@"
 
 
+def _format_fallback_plate_item(value: Any) -> str:
+    """FuelOperation.fallback_plate_numbers item -> human string."""
+    if isinstance(value, dict):
+        # Выводим только значения (без названий ключей).
+        # Сохраняем стабильный порядок через сортировку ключей.
+        parts: list[str] = []
+        for k in sorted(value.keys(), key=lambda x: str(x)):
+            v = value.get(k)
+            s = _format_fallback_plate_item(v) if isinstance(v, (dict, list, tuple, set)) else str(v or "")
+            if s:
+                parts.append(s)
+        return " ".join(parts).strip()
+
+    if isinstance(value, (list, tuple, set)):
+        parts = [_format_fallback_plate_item(v) for v in value]
+        parts = [p for p in parts if p]
+        return " ".join(parts).strip()
+    return str(value or "")
+
+
+def _format_fallback_plates(value: Any) -> str:
+    items = value if isinstance(value, list) else []
+    out = []
+    for item in items:
+        s = _format_fallback_plate_item(item)
+        if s:
+            out.append(s)
+    return "\n".join(out)
+
+
 def _fetch_snapshot_bytes(
     *,
     snapshot_path: str,
@@ -98,7 +172,7 @@ def _fetch_snapshot_bytes(
         return None
 
 
-def export_fuel_report_to_xlsx_bytes(*, report_id: int) -> bytes:
+def export_fuel_report_to_xlsx_bytes(*, report_id: int, columns: Optional[list[str]] = None) -> bytes:
     """Сформировать XLSX по FuelOperation для указанного FuelReport.
 
     В выгрузку включаются как исходные поля FuelOperation, так и результаты анализа:
@@ -126,40 +200,35 @@ def export_fuel_report_to_xlsx_bytes(*, report_id: int) -> bytes:
     ws = wb.active
     ws.title = "FuelOperations"
 
-    headers = [
-        "Дата/время операции",
-        "Карта (card_number)",
-        "Подразделение",
-        "Товар",
-        "Код",
-        "Количество",
-        "Ед.",
-        "Стоимость всего",
-        "АЗС (владелец)",
-        "АЗС (номер)",
-        "Водитель",
-        "ТС",
-        "Номер авто (PlateIdentity)",
-        "Гос.регион",
-        "Владелец (Ф)",
-        "Владелец (И)",
-        "Владелец (О/card)",
-        "Список",
-        "Уровень",
-        "Alarm (шт)",
-        "Alarm (id@time)",
-        "Snapshot 1",
-        "Snapshot 2",
-        "Snapshot 3",
-        "Snapshot URL 1",
-        "Snapshot URL 2",
-        "Snapshot URL 3",
-        "Проанализировано",
-    ]
+    # Какие колонки выводим
+    if columns is None:
+        selected_keys = default_fuel_report_xlsx_column_keys()
+    else:
+        want = set(str(k) for k in (columns or []))
+        selected_keys = [c["key"] for c in FUEL_REPORT_XLSX_COLUMNS if c.get("key") in want]
 
-    ALARM_REF_COL_IDX = headers.index("Alarm (id@time)") + 1
-    SNAPSHOT_COL_START_IDX = headers.index("Snapshot 1") + 1
-    SNAPSHOT_URL_COL_START_IDX = headers.index("Snapshot URL 1") + 1
+    # safety: если пользователь снял все галочки — берём дефолт
+    if not selected_keys:
+        selected_keys = default_fuel_report_xlsx_column_keys()
+
+    selected_cols = [c for c in FUEL_REPORT_XLSX_COLUMNS if c["key"] in set(selected_keys)]
+    headers = [c["header"] for c in selected_cols]
+
+    key_to_col_idx: dict[str, int] = {c["key"]: i + 1 for i, c in enumerate(selected_cols)}
+    ALARM_REF_COL_IDX = key_to_col_idx.get("alarms_refs", -1)
+    FALLBACK_PLATES_COL_IDX = key_to_col_idx.get("fallback_plates", -1)
+
+    snapshot_keys = ["snapshot_1", "snapshot_2", "snapshot_3"]
+    snapshot_url_keys = ["snapshot_url_1", "snapshot_url_2", "snapshot_url_3"]
+
+    need_snapshot_images = any(k in key_to_col_idx for k in snapshot_keys)
+    need_snapshot_urls = any(k in key_to_col_idx for k in snapshot_url_keys)
+    need_alarms = (
+        "alarms_count" in key_to_col_idx
+        or "alarms_refs" in key_to_col_idx
+        or need_snapshot_images
+        or need_snapshot_urls
+    )
 
     header_font = Font(bold=True, color="FFFFFF")
     header_fill = PatternFill("solid", fgColor="4F81BD")
@@ -191,93 +260,108 @@ def export_fuel_report_to_xlsx_bytes(*, report_id: int) -> bytes:
         pi = getattr(op, "plate_identity", None)
 
         matched = getattr(op, "matched_alarms", None) or []
-        alarms_count = len(matched)
-        alarms_str = "\n".join(_format_alarm_ref(r) for r in matched)
+        alarms_count = len(matched) if need_alarms else 0
+        alarms_str = "\n".join(_format_alarm_ref(r) for r in matched) if (need_alarms and matched) else ""
 
-        # Берём до 3 снимков по совпавшим Alarm (в том порядке, в каком лежат matched_alarms)
-        alarm_pks: list[int] = []
-        for r in matched[:3]:
-            try:
-                alarm_pks.append(int(r.get("id")))
-            except Exception:
-                continue
-
+        # Snapshots берём только если их реально выводим.
         snapshot_urls: list[str] = []
         snapshot_bytes_list: list[Optional[bytes]] = []
-        for pk in alarm_pks:
-            a = alarm_cache.get(pk)
-            if a is None and pk not in alarm_cache:
+        if need_snapshot_urls or need_snapshot_images:
+            # Берём до 3 снимков по совпавшим Alarm (в том порядке, в каком лежат matched_alarms)
+            alarm_pks: list[int] = []
+            for r in matched[:3]:
                 try:
-                    a = (
-                        Alarm.objects.only("id", "account_id", "original_quality_snapshot")
-                        .select_related(None)
-                        .get(pk=pk)
-                    )
+                    alarm_pks.append(int(r.get("id")))
                 except Exception:
-                    a = None
-                alarm_cache[pk] = a
+                    continue
 
-            if not a or not getattr(a, "original_quality_snapshot", None):
-                snapshot_urls.append("")
-                snapshot_bytes_list.append(None)
-                continue
+            for pk in alarm_pks:
+                a = alarm_cache.get(pk)
+                if a is None and pk not in alarm_cache:
+                    try:
+                        a = (
+                            Alarm.objects.only("id", "account_id", "original_quality_snapshot")
+                            .select_related(None)
+                            .get(pk=pk)
+                        )
+                    except Exception:
+                        a = None
+                    alarm_cache[pk] = a
 
-            snap_path = str(a.original_quality_snapshot)
-            snapshot_urls.append(snap_path)
+                if not a or not getattr(a, "original_quality_snapshot", None):
+                    snapshot_urls.append("")
+                    snapshot_bytes_list.append(None)
+                    continue
 
-            if not pillow_available or images_added >= max_images_total:
-                snapshot_bytes_list.append(None)
-                continue
+                snap_path = str(a.original_quality_snapshot)
+                snapshot_urls.append(snap_path)
 
-            b = _fetch_snapshot_bytes(
-                snapshot_path=snap_path,
-                account_id=int(a.account_id),
-                client_cache=client_cache,
-            )
-            snapshot_bytes_list.append(b)
+                if not need_snapshot_images or not pillow_available or images_added >= max_images_total:
+                    snapshot_bytes_list.append(None)
+                    continue
 
-        row = [
-            _to_local_str(op.operation_at),
-            str(op.card_number or ""),
-            str(op.department_number or ""),
-            str(op.product_name or ""),
-            str(op.product_code or ""),
-            float(op.quantity) if isinstance(op.quantity, Decimal) else (op.quantity or ""),
-            str(op.unit or ""),
-            float(op.total_cost) if isinstance(op.total_cost, Decimal) else (op.total_cost or ""),
-            str(op.station_owner or ""),
-            str(op.station_number or ""),
-            str(op.driver_name or ""),
-            str(op.vehicle_number or ""),
-            str(getattr(pi, "number", "") or ""),
-            str(getattr(pi, "state", "") or ""),
-            str(getattr(pi, "owner_last_name", "") or ""),
-            str(getattr(pi, "owner_first_name", "") or ""),
-            str(getattr(pi, "owner_middle_name", "") or ""),
-            str(getattr(pi, "list_name", "") or ""),
-            getattr(pi, "list_level", "") if pi else "",
-            alarms_count,
-            alarms_str,
-            "",
-            "",
-            "",
-            snapshot_urls[0] if len(snapshot_urls) > 0 else "",
-            snapshot_urls[1] if len(snapshot_urls) > 1 else "",
-            snapshot_urls[2] if len(snapshot_urls) > 2 else "",
-            _to_local_str(getattr(op, "analyzed_at", None)),
-        ]
+                b = _fetch_snapshot_bytes(
+                    snapshot_path=snap_path,
+                    account_id=int(a.account_id),
+                    client_cache=client_cache,
+                )
+                snapshot_bytes_list.append(b)
+
+        # Собираем значения по ключам
+        values: dict[str, Any] = {
+            "operation_at": _to_local_str(op.operation_at),
+            "card_number": str(op.card_number or ""),
+            "department_number": str(op.department_number or ""),
+            "product_name": str(op.product_name or ""),
+            "product_code": str(op.product_code or ""),
+            "quantity": float(op.quantity) if isinstance(op.quantity, Decimal) else (op.quantity or ""),
+            "unit": str(op.unit or ""),
+            "total_cost": float(op.total_cost) if isinstance(op.total_cost, Decimal) else (op.total_cost or ""),
+            "station_owner": str(op.station_owner or ""),
+            "station_number": str(op.station_number or ""),
+            "driver_name": str(op.driver_name or ""),
+            "vehicle_number": str(op.vehicle_number or ""),
+            "pi_number": str(getattr(pi, "number", "") or ""),
+            "pi_state": str(getattr(pi, "state", "") or ""),
+            "pi_owner_last": str(getattr(pi, "owner_last_name", "") or ""),
+            "pi_owner_first": str(getattr(pi, "owner_first_name", "") or ""),
+            "pi_owner_middle": str(getattr(pi, "owner_middle_name", "") or ""),
+            "pi_list_name": str(getattr(pi, "list_name", "") or ""),
+            "pi_list_level": getattr(pi, "list_level", "") if pi else "",
+            "fallback_plates": _format_fallback_plates(getattr(op, "fallback_plate_numbers", None)),
+            "alarms_count": alarms_count,
+            "alarms_refs": alarms_str,
+            "snapshot_1": "",
+            "snapshot_2": "",
+            "snapshot_3": "",
+            "snapshot_url_1": snapshot_urls[0] if len(snapshot_urls) > 0 else "",
+            "snapshot_url_2": snapshot_urls[1] if len(snapshot_urls) > 1 else "",
+            "snapshot_url_3": snapshot_urls[2] if len(snapshot_urls) > 2 else "",
+            "analyzed_at": _to_local_str(getattr(op, "analyzed_at", None)),
+        }
+
+        row = [values.get(k, "") for k in selected_keys]
         ws.append(row)
 
-        # Выравнивание строк отчёта по центру (кроме Alarm (id@time))
+        # Выравнивание строк
         row_idx = ws.max_row
-        for col_idx in range(1, len(headers) + 1):
-            if col_idx == ALARM_REF_COL_IDX:
+        for c in selected_cols:
+            col_idx = key_to_col_idx.get(c["key"])
+            if not col_idx:
                 continue
-            ws.cell(row=row_idx, column=col_idx).alignment = data_align
+            align = c.get("align")
+            if align == "leftwrap":
+                ws.cell(row=row_idx, column=col_idx).alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
+            else:
+                ws.cell(row=row_idx, column=col_idx).alignment = data_align
 
         # Вставляем превьюшки снимков (best-effort)
-        if pillow_available and images_added < max_images_total:
+        if need_snapshot_images and pillow_available and images_added < max_images_total:
             for i, snap_bytes in enumerate(snapshot_bytes_list[:3]):
+                key = f"snapshot_{i+1}"
+                col_idx = key_to_col_idx.get(key)
+                if not col_idx:
+                    continue
                 if not snap_bytes or images_added >= max_images_total:
                     continue
                 try:
@@ -289,59 +373,19 @@ def export_fuel_report_to_xlsx_bytes(*, report_id: int) -> bytes:
                     out.seek(0)
 
                     xl_img = XLImage(out)
-                    col_idx = SNAPSHOT_COL_START_IDX + i
                     cell = f"{openpyxl.utils.get_column_letter(col_idx)}{row_idx}"
                     ws.add_image(xl_img, cell)
                     ws.row_dimensions[row_idx].height = 80
                     images_added += 1
                 except Exception:
-                    # если не получилось — остаются только URL
                     continue
 
-    # Перенос по строкам для колонки Alarm (id@time)
-    alarm_ref_alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
-    for row_idx in range(2, ws.max_row + 1):
-        ws.cell(row=row_idx, column=ALARM_REF_COL_IDX).alignment = alarm_ref_alignment
-
-    # Перенос по строкам для URL-колонок
-    url_alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
-    for row_idx in range(2, ws.max_row + 1):
-        for col_idx in range(SNAPSHOT_URL_COL_START_IDX, SNAPSHOT_URL_COL_START_IDX + 3):
-            ws.cell(row=row_idx, column=col_idx).alignment = url_alignment
-
-    # простая подгонка ширин колонок
-    widths = {
-        1: 19,
-        2: 14,
-        3: 12,
-        4: 20,
-        5: 10,
-        6: 11,
-        7: 6,
-        8: 14,
-        9: 16,
-        10: 10,
-        11: 16,
-        12: 12,
-        13: 14,
-        14: 10,
-        15: 16,
-        16: 12,
-        17: 14,
-        18: 14,
-        19: 8,
-        20: 9,
-        21: 40,
-        22: 18,
-        23: 18,
-        24: 18,
-        25: 40,
-        26: 40,
-        27: 40,
-        28: 19,
-    }
-    for idx, w in widths.items():
-        ws.column_dimensions[openpyxl.utils.get_column_letter(idx)].width = w
+    # ширины колонок
+    for key, col_idx in key_to_col_idx.items():
+        col = next((c for c in selected_cols if c["key"] == key), None)
+        if not col:
+            continue
+        ws.column_dimensions[openpyxl.utils.get_column_letter(col_idx)].width = float(col.get("width") or 12)
 
     bio = io.BytesIO()
     wb.save(bio)

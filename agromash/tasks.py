@@ -24,11 +24,11 @@ logger = logging.getLogger(__name__)
 
 
 @shared_task(bind=True, name="agromash.analyze_fuel_report")
-def analyze_fuel_report_task(self, report_id: int, source: str = "admin") -> None:
+def analyze_fuel_report_task(self, report_id: int, window_minutes: int = 10, source: str = "admin") -> None:
     """Celery-задача: выполнить анализ FuelOperation для конкретного FuelReport."""
     t0 = time.monotonic()
     try:
-        summary = analyze_fuel_report(report_id=report_id, window_minutes=10)
+        summary = analyze_fuel_report(report_id=report_id, window_minutes=int(window_minutes))
         logger.info(
             "analyze_fuel_report done report_id=%s updated=%s with_pi=%s with_alarms=%s alarms_candidates=%s source=%s task_id=%s elapsed_ms=%s",
             report_id,
@@ -55,6 +55,7 @@ def send_fuel_report_xlsx_to_subscribers(
     self,
     report_id: int,
     subscriber_ids: list[int],
+    columns: Optional[list[str]] = None,
     source: str = "admin",
 ) -> None:
     """Сформировать XLSX по FuelReport и отправить выбранным TelegramSubscriber.
@@ -83,7 +84,7 @@ def send_fuel_report_xlsx_to_subscribers(
         return
 
     try:
-        content = export_fuel_report_to_xlsx_bytes(report_id=report.id)
+        content = export_fuel_report_to_xlsx_bytes(report_id=report.id, columns=columns)
     except Exception:
         logger.exception(
             "send_fuel_report_xlsx_to_subscribers: export failed (report_id=%s)",
@@ -202,7 +203,7 @@ def send_fuel_report_xlsx_to_subscribers(
 
 
 @shared_task(bind=True, name="agromash.generate_fuel_report_xlsx_cache")
-def generate_fuel_report_xlsx_cache(self, report_id: int, source: str = "admin") -> None:
+def generate_fuel_report_xlsx_cache(self, report_id: int, columns: Optional[list[str]] = None, source: str = "admin") -> None:
     """Сформировать XLSX по FuelReport в фоне и сохранить bytes в FuelReport.export_xlsx_content."""
 
     t0 = time.monotonic()
@@ -221,7 +222,7 @@ def generate_fuel_report_xlsx_cache(self, report_id: int, source: str = "admin")
     )
 
     try:
-        content = export_fuel_report_to_xlsx_bytes(report_id=report_id)
+        content = export_fuel_report_to_xlsx_bytes(report_id=report_id, columns=columns)
         FuelReport.objects.filter(pk=report_id).update(
             export_xlsx_status=FuelReport.EXPORT_STATUS_READY,
             export_xlsx_generated_at=timezone.now(),

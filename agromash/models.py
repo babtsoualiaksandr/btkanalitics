@@ -73,6 +73,22 @@ class Alarm(models.Model):
     def __str__(self):
         return f"Alarm {self.alarm_id} - {self.topic}"
 
+    @property
+    def monitor_name_second_token(self) -> str:
+        """Вычисляемое поле: второй элемент из `monitor_name`, разделённого пробелами.
+
+        Пример:
+          - monitor_name="КПП 12 Въезд" -> "12"
+
+        Если `monitor_name` пустой или состоит из одного слова — вернёт пустую строку.
+        """
+        raw = str(self.monitor_name or "").strip()
+        if not raw:
+            return ""
+
+        parts = raw.split()
+        return parts[1] if len(parts) >= 2 else ""
+
 
 
 class Monitor(models.Model):
@@ -201,8 +217,8 @@ class TelegramReportSubscription(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        verbose_name = "Подписка на отчёты"
-        verbose_name_plural = "Подписки на отчёты"
+        verbose_name = "Report subscription"
+        verbose_name_plural = "Report subscriptions"
 
     def __str__(self):
         return f"ReportSubscription(subscriber={self.subscriber_id}, freq={self.frequency})"
@@ -429,6 +445,14 @@ class FuelOperation(models.Model):
         default=list,
         blank=True,
         help_text="Список URL/путей на снимки Alarm.original_quality_snapshot для matched_alarms (best-effort).",
+    )
+    fallback_plate_numbers = models.JSONField(
+        default=list,
+        blank=True,
+        help_text=(
+            "Если PlateIdentity не подобран по card_number -> owner_middle_name — "
+            "список уникальных объектов plates (из Alarm.plate_identities) для matched_alarms."
+        ),
     )
     analyzed_at = models.DateTimeField(null=True, blank=True, db_index=True)
 

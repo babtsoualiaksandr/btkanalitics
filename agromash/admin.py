@@ -34,6 +34,8 @@ from .tasks import generate_fuel_report_xlsx_cache
 from .tasks import is_task_active
 from .tasks import send_fuel_report_xlsx_to_subscribers
 
+from agromash.services.fuel_report_exporter import FUEL_REPORT_XLSX_COLUMNS
+
 from agromash.services.fuel_report_importer import FuelImportError, import_fuel_report_from_xlsx
 
 
@@ -367,7 +369,15 @@ class AccountVideoAnalyticsAdmin(admin.ModelAdmin):
 
 @admin.register(Alarm)
 class AlarmAdmin(admin.ModelAdmin):
-    list_display = ('alarm_id', 'topic', 'monitor_name', 'start_time_human', 'end_time_human', 'snapshot_preview')
+    list_display = (
+        'alarm_id',
+        'topic',
+        'monitor_name',
+        'monitor_name_second_token_display',
+        'start_time_human',
+        'end_time_human',
+        'snapshot_preview',
+    )
     search_fields = (
         'alarm_id',
         'topic',
@@ -425,7 +435,11 @@ class AlarmAdmin(admin.ModelAdmin):
 
     end_time_human.short_description = 'End time'
     end_time_human.admin_order_field = 'end_time'
-    
+
+    @admin.display(description="Monitor (2-й токен)")
+    def monitor_name_second_token_display(self, obj: Alarm) -> str:
+        return getattr(obj, "monitor_name_second_token", "")
+     
     def snapshot_preview(self, obj):
         """Отображение превью изображения в списке и форме редактирования"""
         # access_token может отсутствовать при первичном запуске; serve_snapshot сам выполнит login.
@@ -941,9 +955,22 @@ class FuelReportAdmin(admin.ModelAdmin):
         extra_context["telegram_subscribers"] = (
             TelegramSubscriber.objects.all().order_by("username", "chat_id")
         )
+        extra_context["xlsx_columns"] = [
+            {
+                "key": str(c.get("key")),
+                "label": str(c.get("header")),
+                "default": bool(c.get("default")),
+            }
+            for c in (FUEL_REPORT_XLSX_COLUMNS or [])
+            if c.get("key") and c.get("header")
+        ]
         # URL-шаблон, чтобы JS мог подставить report_id
         extra_context["send_xlsx_url_template"] = reverse(
             "admin:agromash_fuelreport_send_xlsx",
+            args=["__id__"],
+        )
+        extra_context["enqueue_xlsx_url_template"] = reverse(
+            "admin:agromash_fuelreport_enqueue_xlsx",
             args=["__id__"],
         )
         return super().changelist_view(request, extra_context=extra_context)
@@ -992,9 +1019,11 @@ class FuelReportAdmin(admin.ModelAdmin):
             return format_html(
                 '<div class="agromash-admin-action">'
                 '<a class="button" href="{}">Скачать XLSX</a>'
+                '<button type="button" class="button js-fuelreport-enqueue" data-report-id="{}">Пересоздать…</button>'
                 '<span class="agromash-admin-action-hint">готово</span>'
                 '</div>',
                 download_url,
+                obj.pk,
             )
 
         if status == FuelReport.EXPORT_STATUS_PENDING and getattr(obj, "export_xlsx_task_id", None):
@@ -1010,10 +1039,10 @@ class FuelReportAdmin(admin.ModelAdmin):
         suffix_html = "" if status != FuelReport.EXPORT_STATUS_ERROR else "ошибка"
         return format_html(
             '<div class="agromash-admin-action">'
-            '<button type="submit" class="button" formaction="{}" formmethod="post">Сформировать XLSX</button>'
+            '<button type="button" class="button js-fuelreport-enqueue" data-report-id="{}">Сформировать XLSX</button>'
             '<span class="agromash-admin-action-hint">{}</span>'
             '</div>',
-            enqueue_url,
+            obj.pk,
             suffix_html,
         )
 
@@ -1035,8 +1064,9 @@ class FuelReportAdmin(admin.ModelAdmin):
             )
             return redirect(request.META.get("HTTP_REFERER") or reverse("admin:agromash_fuelreport_changelist"))
 
+        columns = request.POST.getlist("columns")
         try:
-            async_res = generate_fuel_report_xlsx_cache.delay(report.id, source="admin")
+            async_res = generate_fuel_report_xlsx_cache.delay(report.id, columns, source="admin")
         except Exception:
             logger.exception("Failed to enqueue generate_fuel_report_xlsx_cache (report_id=%s)", report.id)
             self.message_user(request, "Не удалось поставить задачу в очередь Celery — см. логи", level=messages.ERROR)
@@ -1087,8 +1117,10 @@ class FuelReportAdmin(admin.ModelAdmin):
             self.message_user(request, "Не выбраны получатели", level=messages.ERROR)
             return redirect(request.META.get("HTTP_REFERER") or reverse("admin:agromash_fuelreport_changelist"))
 
+        columns = request.POST.getlist("columns")
+
         try:
-            async_res = send_fuel_report_xlsx_to_subscribers.delay(report.id, subscriber_ids, source="admin")
+            async_res = send_fuel_report_xlsx_to_subscribers.delay(report.id, subscriber_ids, columns, source="admin")
             self.message_user(
                 request,
                 f"Отправка XLSX поставлена в очередь Celery (report_id={report.id}, task_id={async_res.id})",
@@ -1170,6 +1202,63 @@ class FuelReportAdmin(admin.ModelAdmin):
         return redirect(reverse("admin:agromash_fuelreport_change", args=[res.report.id]))
 
 
+class FuelOperationHasPlateIdentityFilter(admin.SimpleListFilter):
+    title = "PlateIdentity"
+    parameter_name = "has_plate_identity"
+
+    def lookups(self, request, model_admin):
+        return (
+            ("1", "есть"),
+            ("0", "нет"),
+        )
+
+    def queryset(self, request, queryset):
+        val = self.value()
+        if val == "1":
+            return queryset.filter(plate_identity__isnull=False)
+        if val == "0":
+            return queryset.filter(plate_identity__isnull=True)
+        return queryset
+
+
+class FuelOperationHasMatchedAlarmsFilter(admin.SimpleListFilter):
+    title = "matched_alarms"
+    parameter_name = "has_matched_alarms"
+
+    def lookups(self, request, model_admin):
+        return (
+            ("1", "есть"),
+            ("0", "нет"),
+        )
+
+    def queryset(self, request, queryset):
+        val = self.value()
+        if val == "1":
+            return queryset.exclude(matched_alarms=[])
+        if val == "0":
+            return queryset.filter(matched_alarms=[])
+        return queryset
+
+
+class FuelOperationHasFallbackPlateNumbersFilter(admin.SimpleListFilter):
+    title = "fallback_plate_numbers"
+    parameter_name = "has_fallback_plate_numbers"
+
+    def lookups(self, request, model_admin):
+        return (
+            ("1", "есть"),
+            ("0", "нет"),
+        )
+
+    def queryset(self, request, queryset):
+        val = self.value()
+        if val == "1":
+            return queryset.exclude(fallback_plate_numbers=[])
+        if val == "0":
+            return queryset.filter(fallback_plate_numbers=[])
+        return queryset
+
+
 @admin.register(FuelOperation)
 class FuelOperationAdmin(admin.ModelAdmin):
     list_display = (
@@ -1177,6 +1266,7 @@ class FuelOperationAdmin(admin.ModelAdmin):
         "report",
         "card_number",
         "plate_identity",
+        "fallback_plate_numbers_preview",
         "operation_at",
         "product_name",
         "quantity",
@@ -1188,7 +1278,17 @@ class FuelOperationAdmin(admin.ModelAdmin):
         "matched_alarms_links",
         "matched_alarm_snapshots_preview",
     )
-    list_filter = ("station_owner", "product_name")
+    list_filter = (
+        "report",
+        "station_owner",
+        "station_number",
+        "product_name",
+        "plate_identity",
+        "analyzed_at",
+        FuelOperationHasPlateIdentityFilter,
+        FuelOperationHasMatchedAlarmsFilter,
+        FuelOperationHasFallbackPlateNumbersFilter,
+    )
     search_fields = (
         "card_number",
         "vehicle_number",
@@ -1200,6 +1300,7 @@ class FuelOperationAdmin(admin.ModelAdmin):
     )
     autocomplete_fields = ("report",)
     date_hierarchy = "operation_at"
+    list_per_page = 10
 
     def matched_alarms_count(self, obj: FuelOperation) -> int:
         return len(getattr(obj, "matched_alarms", None) or [])
@@ -1228,13 +1329,32 @@ class FuelOperationAdmin(admin.ModelAdmin):
 
     matched_alarms_links.short_description = "Alarm"
 
+    def fallback_plate_numbers_preview(self, obj: FuelOperation) -> str:
+        nums = getattr(obj, "fallback_plate_numbers", None) or []
+        if not nums:
+            return "-"
+        # чтобы список не раздувал колонку
+        import json
+
+        def _fmt(x) -> str:
+            if isinstance(x, dict):
+                # компактно, но читаемо
+                return json.dumps(x, ensure_ascii=False, sort_keys=True)
+            return str(x)
+
+        head = " | ".join(_fmt(x) for x in nums[:10])
+        suffix = "" if len(nums) <= 10 else " …"
+        return head + suffix
+
+    fallback_plate_numbers_preview.short_description = "Fallback номера"
+
     def matched_alarm_snapshots_preview(self, obj: FuelOperation):
         """Превью снимков для совпавших тревог (через proxy view serve_snapshot).
 
         `serve_snapshot` сам использует креды из `Alarm.account` (AccountVideoAnalytics).
         """
 
-        rows = (getattr(obj, "matched_alarms", None) or [])[:3]
+        rows = (getattr(obj, "matched_alarms", None) or [])
         pairs = []
         for row in rows:
             alarm_id = row.get("alarm_id")
