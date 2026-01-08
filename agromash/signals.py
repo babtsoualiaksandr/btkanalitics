@@ -3,7 +3,7 @@ from django.dispatch import receiver
 from django.db.models import Q
 from django.db import IntegrityError, transaction
 
-from .models import Alarm, Monitor, TelegramSubscriber, PlateIdentity
+from .models import Alarm, Monitor, TelegramSubscriber, TelegramSubscriberMonitorSubscription, PlateIdentity
 from .services.alarm_data_parser import format_alarm_caption, parse_alarm_data
 from django.conf import settings
 
@@ -36,14 +36,31 @@ def _get_alarm_subscribers_chat_ids(instance: Alarm) -> list[int]:
     monitor_id = getattr(instance, "monitor_id", None)
     monitor_id_str = "" if monitor_id is None else str(monitor_id)
 
-    subscribers_qs = TelegramSubscriber.objects.filter(
-        Q(subscribed_monitors__monitor_id=monitor_id_str)
-        # fallback: legacy JSON (если есть старые данные)
-        | Q(subscribed_monitor_ids__contains=[monitor_id_str])
-        | Q(subscribed_monitor_ids__contains=[monitor_id])
-    ).distinct()
+    # 1) Актуальная схема: через through-модель с флагом enabled
+    enabled_chat_ids = list(
+        TelegramSubscriberMonitorSubscription.objects.filter(
+            enabled=True,
+            monitor__monitor_id=monitor_id_str,
+        ).values_list("subscriber__chat_id", flat=True)
+    )
 
-    return list(subscribers_qs.values_list("chat_id", flat=True))
+    # 2) Legacy fallback: JSON список monitor_id (без возможности disable)
+    legacy_chat_ids = list(
+        TelegramSubscriber.objects.filter(
+            Q(subscribed_monitor_ids__contains=[monitor_id_str])
+            | Q(subscribed_monitor_ids__contains=[monitor_id])
+        ).values_list("chat_id", flat=True)
+    )
+
+    # уникальные, стабильный порядок
+    seen = set()
+    out = []
+    for cid in [*enabled_chat_ids, *legacy_chat_ids]:
+        if cid in seen:
+            continue
+        seen.add(cid)
+        out.append(int(cid))
+    return out
 
 @receiver(post_save, sender=Alarm)
 def send_alarm_to_telegram(sender, instance, created, **kwargs):

@@ -134,6 +134,12 @@ class TelegramSubscriberMonitorSubscription(models.Model):
 
     subscriber = models.ForeignKey(TelegramSubscriber, on_delete=models.CASCADE)
     monitor = models.ForeignKey(Monitor, on_delete=models.CASCADE)
+    enabled = models.BooleanField(
+        default=True,
+        db_index=True,
+        verbose_name="Активно",
+        help_text="Если выключено — оповещения по Alarm для этого монитора подписчику не отправляются.",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

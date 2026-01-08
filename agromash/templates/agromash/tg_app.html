@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>BTK Reports</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+      :root { --bg: #0f0f10; --card: #1b1b1d; --muted:#9aa0a6; --text:#e8eaed; --accent:#2ea6ff; --danger:#ff5a5f; }
+      body { margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; background: var(--bg); color: var(--text); }
+      header { padding: 14px 16px; border-bottom: 1px solid #2a2a2c; }
+      h1 { margin:0; font-size: 18px; }
+      main { padding: 12px 16px 24px; }
+      .row { display:flex; gap:10px; flex-wrap: wrap; }
+      .card { background: var(--card); border: 1px solid #2a2a2c; border-radius: 12px; padding: 12px; margin: 10px 0; }
+      .muted { color: var(--muted); }
+      .btn { border: 1px solid #2a2a2c; background: transparent; color: var(--text); padding: 10px 12px; border-radius: 10px; cursor: pointer; }
+      .btn.primary { border-color: var(--accent); color: var(--accent); }
+      .btn.danger { border-color: var(--danger); color: var(--danger); }
+      .btn:disabled { opacity: .5; cursor: not-allowed; }
+      label { display:block; font-size: 12px; color: var(--muted); margin-top: 10px; }
+      input, select { width: 100%; box-sizing: border-box; background: #111113; border: 1px solid #2a2a2c; color: var(--text); padding: 10px 12px; border-radius: 10px; }
+      .grid { display:grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+      .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+      .list-item { cursor:pointer; }
+      .badge { display:inline-block; padding: 2px 8px; border-radius: 999px; border: 1px solid #2a2a2c; font-size: 12px; }
+      .badge.on { border-color: #3ddc84; color: #3ddc84; }
+      .badge.off { border-color: #888; color: #888; }
+      .hr { height:1px; background:#2a2a2c; margin: 10px 0; }
+      .error { color: var(--danger); white-space: pre-wrap; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Подписки на отчёты</h1>
+      <div id="me" class="muted" style="margin-top:6px;font-size:12px;"></div>
+    </header>
+    <main>
+      <div id="error" class="error"></div>
+      <div id="list">
+        <div id="alarmMonitors"></div>
+        <div id="subs"></div>
+      </div>
+      <div id="details" style="display:none;"></div>
+    </main>
+
+    <script>
+      const tg = window.Telegram?.WebApp;
+      if (tg) { tg.ready(); tg.expand(); }
+
+      const initData = tg?.initData || "";
+
+      function el(tag, attrs={}, children=[]) {
+        const e = document.createElement(tag);
+        for (const [k,v] of Object.entries(attrs)) {
+          if (k === 'class') e.className = v;
+          else if (k === 'html') e.innerHTML = v;
+          else e.setAttribute(k, v);
+        }
+        for (const c of children) e.appendChild(c);
+        return e;
+      }
+
+      function setError(msg) {
+        document.getElementById('error').textContent = msg || '';
+      }
+
+      async function api(path, body=null) {
+        const opt = {
+          method: body ? 'POST' : 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Telegram-Init-Data': initData,
+          },
+        };
+        if (body) opt.body = JSON.stringify(body);
+        const resp = await fetch(path, opt);
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok || !data.ok) {
+          const err = data.error || (resp.status + ' ' + resp.statusText);
+          throw new Error(err);
+        }
+        return data;
+      }
+
+      function fmtMonitors(monitors) {
+        if (!monitors || !monitors.length) return 'Все мониторы';
+        return monitors.map(m => `${m.monitor_name} (${m.monitor_id})`).join(', ');
+      }
+
+      function showList(subs) {
+        const list = document.getElementById('subs');
+        list.innerHTML = '';
+        const details = document.getElementById('details');
+        details.style.display = 'none';
+        document.getElementById('list').style.display = 'block';
+
+        if (!subs.length) {
+          list.appendChild(el('div', {class:'card', html:`<div class="muted">У вас нет подписок.</div>`}));
+          return;
+        }
+
+        for (const s of subs) {
+          const badge = s.enabled ? '<span class="badge on">включено</span>' : '<span class="badge off">выключено</span>';
+          const card = el('div', {class:'card list-item'});
+          card.innerHTML = `
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
+              <div>
+                <div><b>Подписка #${s.id}</b> ${badge}</div>
+                <div class="muted" style="margin-top:4px;">${fmtMonitors(s.monitors)}</div>
+              </div>
+              <div class="muted mono">${s.frequency}</div>
+            </div>
+            <div class="hr"></div>
+            <div class="muted" style="font-size:12px;">
+              period: ${s.period_from_minutes}..${s.period_to_minutes} мин назад · pdf=${s.send_pdf ? 'on' : 'off'} · xlsx=${s.send_xlsx ? 'on' : 'off'}
+            </div>
+          `;
+          card.addEventListener('click', () => showDetails(s));
+          list.appendChild(card);
+        }
+      }
+
+      function selectOption(select, value) {
+        for (const o of select.options) if (o.value === value) { o.selected = true; break; }
+      }
+
+      function showDetails(s) {
+        const list = document.getElementById('list');
+        const details = document.getElementById('details');
+        list.style.display = 'none';
+        details.style.display = 'block';
+        details.innerHTML = '';
+
+        const backBtn = el('button', {class:'btn'}, [document.createTextNode('← Назад')]);
+        backBtn.onclick = () => { details.style.display='none'; list.style.display='block'; };
+
+        const card = el('div', {class:'card'});
+        card.appendChild(el('div', {html: `<b>Подписка #${s.id}</b> <span class="muted">(${fmtMonitors(s.monitors)})</span>`}));
+
+        const email = el('input', {type:'email', value: s.email || '', placeholder: 'email@domain.com'});
+        const freq = el('select');
+        for (const v of ['10m','hourly','daily','weekly','monthly']) {
+          freq.appendChild(el('option', {value: v, html: v}));
+        }
+        selectOption(freq, s.frequency);
+
+        const pFrom = el('input', {type:'number', min:'0', step:'1', value: String(s.period_from_minutes)});
+        const pTo = el('input', {type:'number', min:'0', step:'1', value: String(s.period_to_minutes)});
+
+        const sendPdf = el('select');
+        sendPdf.appendChild(el('option', {value:'true', html:'Да'}));
+        sendPdf.appendChild(el('option', {value:'false', html:'Нет'}));
+        selectOption(sendPdf, String(!!s.send_pdf));
+
+        const sendXlsx = el('select');
+        sendXlsx.appendChild(el('option', {value:'true', html:'Да'}));
+        sendXlsx.appendChild(el('option', {value:'false', html:'Нет'}));
+        selectOption(sendXlsx, String(!!s.send_xlsx));
+
+        const enabled = el('select');
+        enabled.appendChild(el('option', {value:'true', html:'Включено'}));
+        enabled.appendChild(el('option', {value:'false', html:'Выключено'}));
+        selectOption(enabled, String(!!s.enabled));
+
+        const saveBtn = el('button', {class:'btn primary'}, [document.createTextNode('Сохранить')]);
+        const status = el('div', {class:'muted', style:'margin-top:10px;font-size:12px;'});
+        saveBtn.onclick = async () => {
+          setError('');
+          status.textContent = 'Сохраняю…';
+          try {
+            const data = await api(`/agromash/tg/api/subscriptions/${s.id}/update/`, {
+              email: email.value,
+              frequency: freq.value,
+              period_from_minutes: Number(pFrom.value),
+              period_to_minutes: Number(pTo.value),
+              send_pdf: sendPdf.value === 'true',
+              send_xlsx: sendXlsx.value === 'true',
+              enabled: enabled.value === 'true',
+            });
+            s = data.subscription;
+            status.textContent = 'Сохранено.';
+          } catch (e) {
+            status.textContent = '';
+            setError(String(e.message || e));
+          }
+        };
+
+        const sendNowTg = el('button', {class:'btn'}, [document.createTextNode('Отправить сейчас в Telegram')]);
+        const sendNowEmail = el('button', {class:'btn'}, [document.createTextNode('Отправить сейчас на Email')]);
+        const sendNowBoth = el('button', {class:'btn'}, [document.createTextNode('Отправить сейчас (Telegram + Email)')]);
+
+        sendNowTg.onclick = () => sendNow(s.id, 'telegram');
+        sendNowEmail.onclick = () => sendNow(s.id, 'email');
+        sendNowBoth.onclick = () => sendNow(s.id, 'both');
+
+        async function sendNow(id, channel) {
+          setError('');
+          status.textContent = 'Ставлю в очередь…';
+          try {
+            const data = await api(`/agromash/tg/api/subscriptions/${id}/send-now/`, {channel});
+            status.textContent = `Поставлено в очередь: ${data.task_ids.join(', ')}`;
+          } catch (e) {
+            status.textContent = '';
+            setError(String(e.message || e));
+          }
+        }
+
+        const start = el('input', {type:'datetime-local'});
+        const end = el('input', {type:'datetime-local'});
+        // default: последние 24 часа
+        const now = new Date();
+        const dayAgo = new Date(now.getTime() - 24*60*60*1000);
+        start.value = dayAgo.toISOString().slice(0,16);
+        end.value = now.toISOString().slice(0,16);
+
+        const sendRangeTg = el('button', {class:'btn'}, [document.createTextNode('Диапазон → Telegram')]);
+        const sendRangeEmail = el('button', {class:'btn'}, [document.createTextNode('Диапазон → Email')]);
+        const sendRangeBoth = el('button', {class:'btn'}, [document.createTextNode('Диапазон → Telegram + Email')]);
+
+        sendRangeTg.onclick = () => sendRange(s.id, 'telegram');
+        sendRangeEmail.onclick = () => sendRange(s.id, 'email');
+        sendRangeBoth.onclick = () => sendRange(s.id, 'both');
+
+        async function sendRange(id, channel) {
+          setError('');
+          status.textContent = 'Ставлю диапазон в очередь…';
+          try {
+            const data = await api(`/agromash/tg/api/subscriptions/${id}/send-range/`, {
+              channel,
+              start: start.value,
+              end: end.value,
+            });
+            status.textContent = `Поставлено в очередь: ${data.task_ids.join(', ')}`;
+          } catch (e) {
+            status.textContent = '';
+            setError(String(e.message || e));
+          }
+        }
+
+        card.appendChild(el('label', {html:'Email получателя'}));
+        card.appendChild(email);
+
+        card.appendChild(el('label', {html:'Частота (frequency)'}));
+        card.appendChild(freq);
+
+        const grid = el('div', {class:'grid'});
+        const c1 = el('div'); c1.appendChild(el('label', {html:'Период ОТ (минут назад)'})); c1.appendChild(pFrom);
+        const c2 = el('div'); c2.appendChild(el('label', {html:'Период ДО (минут назад)'})); c2.appendChild(pTo);
+        grid.appendChild(c1); grid.appendChild(c2);
+        card.appendChild(grid);
+
+        const grid2 = el('div', {class:'grid'});
+        const c3 = el('div'); c3.appendChild(el('label', {html:'Отправлять PDF'})); c3.appendChild(sendPdf);
+        const c4 = el('div'); c4.appendChild(el('label', {html:'Отправлять XLSX'})); c4.appendChild(sendXlsx);
+        grid2.appendChild(c3); grid2.appendChild(c4);
+        card.appendChild(grid2);
+
+        card.appendChild(el('label', {html:'Статус подписки'}));
+        card.appendChild(enabled);
+
+        card.appendChild(el('div', {style:'margin-top:12px;'} , [saveBtn]));
+        card.appendChild(status);
+
+        const actions = el('div', {class:'card'});
+        actions.appendChild(el('div', {html:'<b>Запуск отчёта</b>'}));
+        actions.appendChild(el('div', {class:'row', style:'margin-top:10px;'}, [sendNowTg, sendNowEmail, sendNowBoth]));
+        actions.appendChild(el('div', {class:'hr'}));
+        actions.appendChild(el('div', {class:'muted', html:'Диапазон (локальное время):'}));
+        const grid3 = el('div', {class:'grid', style:'margin-top:8px;'});
+        const c5 = el('div'); c5.appendChild(el('label', {html:'Начало'})); c5.appendChild(start);
+        const c6 = el('div'); c6.appendChild(el('label', {html:'Конец'})); c6.appendChild(end);
+        grid3.appendChild(c5); grid3.appendChild(c6);
+        actions.appendChild(grid3);
+        actions.appendChild(el('div', {class:'row', style:'margin-top:10px;'}, [sendRangeTg, sendRangeEmail, sendRangeBoth]));
+
+        details.appendChild(backBtn);
+        details.appendChild(card);
+        details.appendChild(actions);
+      }
+
+      async function boot() {
+        try {
+          if (!initData) throw new Error('Telegram initData отсутствует (открывайте страницу внутри Telegram).');
+          const [data, alarms] = await Promise.all([
+            api('/agromash/tg/api/subscriptions/'),
+            api('/agromash/tg/api/alarm-monitors/'),
+          ]);
+          const u = tg?.initDataUnsafe?.user;
+          document.getElementById('me').textContent = u ? `@${u.username || ''} id=${u.id}` : '';
+
+          // Alarm monitors block
+          const alarmRoot = document.getElementById('alarmMonitors');
+          alarmRoot.innerHTML = '';
+          const monitors = alarms.monitors || [];
+          if (monitors.length) {
+            const card = el('div', {class:'card'});
+            card.appendChild(el('div', {html:'<b>Оповещения по Alarm</b><div class="muted" style="margin-top:4px;font-size:12px;">Админ назначает список мониторов, вы можете только включать/выключать.</div>'}));
+            card.appendChild(el('div', {class:'hr'}));
+
+            for (const m of monitors) {
+              const row = el('div', {style:'display:flex;justify-content:space-between;align-items:center;gap:10px;padding:8px 0;'});
+              const left = el('div', {html:`<div>${m.monitor_name} <span class="muted">(${m.monitor_id})</span></div>`});
+              const btn = el('button', {class: 'btn ' + (m.enabled ? 'danger' : 'primary')}, [document.createTextNode(m.enabled ? 'Выключить' : 'Включить')]);
+              btn.onclick = async () => {
+                setError('');
+                btn.disabled = true;
+                try {
+                  const res = await api(`/agromash/tg/api/alarm-monitors/${m.monitor_pk}/set-enabled/`, {enabled: !m.enabled});
+                  m.enabled = !!res.monitor?.enabled;
+                  btn.className = 'btn ' + (m.enabled ? 'danger' : 'primary');
+                  btn.textContent = m.enabled ? 'Выключить' : 'Включить';
+                } catch (e) {
+                  setError(String(e.message || e));
+                } finally {
+                  btn.disabled = false;
+                }
+              };
+              row.appendChild(left);
+              row.appendChild(btn);
+              card.appendChild(row);
+            }
+            alarmRoot.appendChild(card);
+          }
+
+          showList(data.subscriptions || []);
+        } catch (e) {
+          setError(String(e.message || e));
+        }
+      }
+      boot();
+    </script>
+  </body>
+</html>

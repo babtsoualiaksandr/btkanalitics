@@ -631,6 +631,85 @@ def send_email_report_now(self, subscription_id: int, source: str = "admin") -> 
         run_log.save(update_fields=["finished_at", "duration_ms", "ok", "error"])
 
 
+@shared_task(bind=True, name="agromash.send_email_report_range_now")
+def send_email_report_range_now(
+    self,
+    subscription_id: int,
+    start_iso: str,
+    end_iso: str,
+    source: str = "admin",
+) -> None:
+    """Сформировать и отправить email-отчёт по подписке за указанный диапазон start..end (ISO)."""
+
+    sub = (
+        TelegramReportSubscription.objects.select_related("subscriber")
+        .prefetch_related("monitors")
+        .filter(pk=subscription_id)
+        .first()
+    )
+    if not sub:
+        logger.warning("send_email_report_range_now: invalid subscription_id=%s", subscription_id)
+        return
+    if not sub.email:
+        logger.warning("send_email_report_range_now: empty email for subscription_id=%s", sub.id)
+        return
+
+    try:
+        start = datetime.datetime.fromisoformat(start_iso)
+        end = datetime.datetime.fromisoformat(end_iso)
+    except Exception:
+        logger.exception("send_email_report_range_now: invalid datetime input")
+        return
+
+    now = timezone.now()
+    t0 = time.monotonic()
+    run_log = ReportRunLog.objects.create(
+        subscription=sub,
+        subscriber=sub.subscriber if sub.subscriber_id else None,
+        started_at=now,
+        channel=ReportRunLog.CHANNEL_EMAIL,
+    )
+
+    try:
+        caption, attachments, rows_count = generate_report_attachments_for_range(
+            sub=sub,
+            start=start,
+            end=end,
+            now=now,
+        )
+        subject = f"BTK report (range): {rows_count} alarms"
+        _send_email_with_attachments(
+            to_email=str(sub.email),
+            subject=subject,
+            body=caption,
+            attachments=attachments,
+        )
+
+        run_log.finished_at = timezone.now()
+        run_log.duration_ms = int((time.monotonic() - t0) * 1000)
+        run_log.ok = True
+        run_log.error = ""
+        run_log.alarms_count = int(rows_count or 0)
+        run_log.attachments_count = len(attachments or [])
+        run_log.save(
+            update_fields=[
+                "finished_at",
+                "duration_ms",
+                "ok",
+                "error",
+                "alarms_count",
+                "attachments_count",
+            ]
+        )
+    except Exception:
+        logger.exception("send_email_report_range_now failed (subscription_id=%s)", sub.id)
+        run_log.finished_at = timezone.now()
+        run_log.duration_ms = int((time.monotonic() - t0) * 1000)
+        run_log.ok = False
+        run_log.error = "exception"
+        run_log.save(update_fields=["finished_at", "duration_ms", "ok", "error"])
+
+
 @shared_task(name="agromash.send_due_email_reports")
 def send_due_email_reports() -> None:
     """Периодическая задача: отправляет email-отчёты подпискам, у которых подошёл срок."""
