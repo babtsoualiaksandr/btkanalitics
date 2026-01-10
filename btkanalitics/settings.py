@@ -33,6 +33,7 @@ CSRF_TRUSTED_ORIGINS = config('CSRF_TRUSTED_ORIGINS', default='').split(',')
 BASE_URL = config('BASE_URL')
 TLG_BOT_TOKEN = config('TLG_BOT_TOKEN')
 TLG_CHAT_ID = config('TLG_CHAT_ID')
+TLG_CHAT_ID_ADMINS = [ x for x in config("TLG_CHAT_ID_ADMINS", default="").split(",") if x ]
 
 # -----------------
 # Email (SMTP)

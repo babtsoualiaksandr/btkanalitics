@@ -3,8 +3,11 @@ import time
 import os
 import logging
 from django.core.management.base import BaseCommand
-from agromash.models import TelegramSubscriber
+from agromash.models import TelegramSubscriber, AccountVideoAnalytics
 from django.conf import settings
+from django.utils import timezone
+
+from agromash.tasks import parse_event_task, request_stop_parser
 
 
 logger = logging.getLogger(__name__)
@@ -17,6 +20,104 @@ class Command(BaseCommand):
         if not token:
             self.stdout.write(self.style.ERROR('TLG_BOT_TOKEN not set'))
             return
+
+        def _admin_chat_ids() -> set[int]:
+            raw = getattr(settings, "TLG_CHAT_ID_ADMINS", None) or []
+            out: set[int] = set()
+            for x in raw:
+                try:
+                    out.add(int(str(x).strip()))
+                except Exception:
+                    continue
+            return out
+
+        def _is_admin(chat_id: int) -> bool:
+            return int(chat_id) in _admin_chat_ids()
+
+        def _fmt_age(dt) -> str:
+            if not dt:
+                return "-"
+            sec = int((timezone.now() - dt).total_seconds())
+            if sec < 0:
+                sec = 0
+            if sec < 60:
+                return f"{sec}s"
+            mins = sec // 60
+            if mins < 60:
+                return f"{mins}m"
+            hrs = mins // 60
+            return f"{hrs}h"
+
+        def _heart_icon(acc: AccountVideoAnalytics) -> str:
+            if acc.is_parser_running:
+                return "💓"
+            if acc.parser_status == AccountVideoAnalytics.PARSER_STATUS_RUNNING:
+                return "💔"
+            if acc.parser_status in (
+                AccountVideoAnalytics.PARSER_STATUS_STARTING,
+                AccountVideoAnalytics.PARSER_STATUS_STOPPING,
+            ):
+                return "⏳"
+            if acc.parser_status == AccountVideoAnalytics.PARSER_STATUS_ERROR:
+                return "⚠️"
+            return "⏹"
+
+        def _parsers_text() -> str:
+            accounts = list(AccountVideoAnalytics.objects.all().order_by("id"))
+            lines = [
+                "Parser Status (VA accounts)",
+                "Легенда: 💓 online | 💔 нет heartbeat | ⏹ stopped | ⏳ переход | ⚠️ error",
+                "",
+            ]
+            for a in accounts:
+                hb = _fmt_age(getattr(a, "parser_heartbeat_at", None))
+                task = (getattr(a, "parser_task_id", None) or "-")
+                status = getattr(a, "parser_status", "-")
+                lines.append(
+                    f"{_heart_icon(a)} #{a.id} {a.name} | {a.organization} | {status} | hb={hb} | task={task}"
+                )
+            if len(accounts) == 0:
+                lines.append("Нет AccountVideoAnalytics")
+            lines.append("\nКоманды: /parser <id> start|stop")
+            return "\n".join(lines)
+
+        def _tg_post(method: str, payload: dict) -> None:
+            try:
+                requests.post(
+                    f"https://api.telegram.org/bot{token}/{method}",
+                    json=payload,
+                    timeout=15,
+                )
+            except Exception:
+                logger.exception("Telegram API call failed method=%s", method)
+
+        def _register_bot_commands() -> None:
+            base_commands = [
+                {"command": "start", "description": "Старт / регистрация"},
+                {"command": "app", "description": "Открыть Mini App"},
+                {"command": "set", "description": "Подписаться на monitor: /set <id>"},
+            ]
+            admin_extra = [
+                {"command": "parsers", "description": "Статус парсеров (админ)"},
+                {"command": "va", "description": "Alias /parsers (админ)"},
+                {"command": "parser", "description": "Упр. парсером: /parser <id> start|stop (админ)"},
+            ]
+
+            _tg_post(
+                "setMyCommands",
+                {
+                    "commands": base_commands,
+                    "scope": {"type": "default"},
+                },
+            )
+            for cid in sorted(_admin_chat_ids()):
+                _tg_post(
+                    "setMyCommands",
+                    {
+                        "commands": base_commands + admin_extra,
+                        "scope": {"type": "chat", "chat_id": int(cid)},
+                    },
+                )
 
         # URL Mini App (можно переопределить переменной окружения)
         base_url = str(getattr(settings, "BASE_URL", "") or "").rstrip("/")
@@ -36,6 +137,12 @@ class Command(BaseCommand):
         except Exception:
             logger.exception("Failed to deleteWebhook (polling may not work)")
 
+        # Обновляем меню команд (best-effort)
+        try:
+            _register_bot_commands()
+        except Exception:
+            logger.exception("Failed to register bot commands")
+
         offset = 0
         while True:
             try:
@@ -46,6 +153,7 @@ class Command(BaseCommand):
                 data = response.json()
                 if data.get('ok'):
                     for update in data['result']:
+                        offset = update['update_id'] + 1
                         if 'message' in update and update['message'].get('text') in ('/start', '/app'):
                             chat_id = update['message']['chat']['id']
                             username = update['message']['from'].get('username')
@@ -72,7 +180,85 @@ class Command(BaseCommand):
                                 json=payload,
                                 timeout=15,
                             )
-                        offset = update['update_id'] + 1
+
+                        if 'message' in update and update['message'].get('text'):
+                            chat_id = int(update['message']['chat']['id'])
+                            text = str(update['message'].get('text') or '').strip()
+
+                            if text.startswith('/parsers') or text.startswith('/va'):
+                                if not _is_admin(chat_id):
+                                    requests.post(
+                                        f'https://api.telegram.org/bot{token}/sendMessage',
+                                        json={'chat_id': chat_id, 'text': 'Доступ запрещён'},
+                                        timeout=15,
+                                    )
+                                    continue
+
+                                requests.post(
+                                    f'https://api.telegram.org/bot{token}/sendMessage',
+                                    json={'chat_id': chat_id, 'text': _parsers_text()},
+                                    timeout=15,
+                                )
+                                continue
+
+                            if text.startswith('/parser'):
+                                if not _is_admin(chat_id):
+                                    requests.post(
+                                        f'https://api.telegram.org/bot{token}/sendMessage',
+                                        json={'chat_id': chat_id, 'text': 'Доступ запрещён'},
+                                        timeout=15,
+                                    )
+                                    continue
+
+                                parts = text.split()
+                                if len(parts) < 3:
+                                    requests.post(
+                                        f'https://api.telegram.org/bot{token}/sendMessage',
+                                        json={'chat_id': chat_id, 'text': 'Использование: /parser <id> start|stop'},
+                                        timeout=15,
+                                    )
+                                    continue
+
+                                try:
+                                    account_id = int(parts[1])
+                                except Exception:
+                                    requests.post(
+                                        f'https://api.telegram.org/bot{token}/sendMessage',
+                                        json={'chat_id': chat_id, 'text': 'id должен быть числом'},
+                                        timeout=15,
+                                    )
+                                    continue
+
+                                action = str(parts[2]).strip().lower()
+                                action = 'start' if action in ('start', 'on', 'run') else action
+                                action = 'stop' if action in ('stop', 'off') else action
+
+                                acc = AccountVideoAnalytics.objects.filter(pk=account_id).first()
+                                if not acc:
+                                    msg = f'AccountVideoAnalytics id={account_id} не найден'
+                                elif action == 'start':
+                                    if acc.is_parser_running:
+                                        msg = f'#{acc.id} уже запущен'
+                                    else:
+                                        async_res = parse_event_task.delay(acc.id)
+                                        AccountVideoAnalytics.objects.filter(pk=acc.id).update(
+                                            parser_status=AccountVideoAnalytics.PARSER_STATUS_STARTING,
+                                            parser_task_id=async_res.id,
+                                            parser_stop_requested=False,
+                                            parser_last_error=None,
+                                        )
+                                        msg = f'#{acc.id} старт поставлен в очередь (task_id={async_res.id})'
+                                elif action == 'stop':
+                                    task_id = request_stop_parser(account_id=acc.id, terminate=True)
+                                    msg = f'#{acc.id} остановка запрошена' + (f' (task_id={task_id})' if task_id else '')
+                                else:
+                                    msg = 'Использование: /parser <id> start|stop'
+
+                                requests.post(
+                                    f'https://api.telegram.org/bot{token}/sendMessage',
+                                    json={'chat_id': chat_id, 'text': msg},
+                                    timeout=15,
+                                )
                 time.sleep(1)
             except Exception:
                 logger.exception("Telegram polling loop error")
