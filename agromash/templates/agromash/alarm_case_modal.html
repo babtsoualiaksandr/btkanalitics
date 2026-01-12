@@ -1,0 +1,52 @@
+<div class="btk-case">
+  <div class="btk-case__meta">
+    <div><span class="btk-muted">alarm_id:</span> <code>{{ alarm.alarm_id }}</code></div>
+    <div><span class="btk-muted">monitor:</span> {{ alarm.monitor_name }}</div>
+    <div><span class="btk-muted">topic:</span> {{ alarm.topic }}</div>
+  </div>
+
+  <form class="btk-form" method="post" enctype="multipart/form-data" action="{% url 'alarm_case_modal' alarm.pk %}">
+    {% csrf_token %}
+
+    <div class="btk-field">
+      <label class="btk-label" for="id_description">Описание</label>
+      <textarea class="btk-textarea" id="id_description" name="description" rows="4">{{ case.description }}</textarea>
+    </div>
+
+    <div class="btk-field">
+      <label class="btk-label" for="id_note">Примечание</label>
+      <textarea class="btk-textarea" id="id_note" name="note" rows="3">{{ case.note }}</textarea>
+    </div>
+
+    <div class="btk-field">
+      <label class="btk-label" for="id_documents">Добавить документы/изображения</label>
+      <input class="btk-input" id="id_documents" type="file" name="documents" multiple />
+      <div class="btk-hint">Можно выбрать несколько файлов.</div>
+    </div>
+
+    <div class="btk-actions">
+      <button class="btk-btn" type="submit">Сохранить</button>
+    </div>
+  </form>
+
+  <hr class="btk-hr" />
+
+  <h3 class="btk-h3">Документы</h3>
+  <div class="btk-docs">
+    {% for d in documents %}
+      <div class="btk-doc">
+        <div class="btk-doc__title">{{ d.title|default:"(без названия)" }}</div>
+        <div class="btk-doc__actions">
+          <a class="btk-btn btk-btn--small btk-btn--ghost" href="{% url 'alarm_document_file' d.pk %}" target="_blank" rel="noopener">Открыть</a>
+          <form method="post" action="{% url 'alarm_document_delete' d.pk %}">
+            {% csrf_token %}
+            <button class="btk-btn btk-btn--small btk-btn--danger" type="submit">Удалить</button>
+          </form>
+        </div>
+      </div>
+    {% empty %}
+      <div class="btk-muted">Документов пока нет.</div>
+    {% endfor %}
+  </div>
+</div>
+

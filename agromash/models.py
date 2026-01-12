@@ -58,6 +58,15 @@ class AccountVideoAnalytics(models.Model):
 class Alarm(models.Model):
     monitor_id = models.IntegerField()
     monitor_name = models.CharField(max_length=255)
+    # Нормализованная связь с Monitor (best-effort). Дублирует monitor_id/monitor_name,
+    # потому что исторически Alarm сохранялся без FK.
+    monitor_ref = models.ForeignKey(
+        'Monitor',
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='alarms',
+    )
     alarm_id = models.CharField(max_length=255, unique=True)
     topic = models.CharField(max_length=255)
     start_time = models.BigIntegerField()
@@ -100,6 +109,107 @@ class Monitor(models.Model):
 
     def __str__(self):
         return f"{self.monitor_name} (ID: {self.monitor_id})"
+
+
+class UserMonitorAccess(models.Model):
+    """Права доступа Django User к Monitor (для web-страницы событий).
+
+    Аналогично [`TelegramSubscriberMonitorSubscription`](agromash/models.py:132),
+    но для пользователей Django (вход по сессии).
+    """
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='monitor_accesses')
+    monitor = models.ForeignKey(Monitor, on_delete=models.CASCADE, related_name='user_accesses')
+    enabled = models.BooleanField(
+        default=True,
+        db_index=True,
+        verbose_name='Активно',
+        help_text='Если выключено — монитор не доступен пользователю в web-интерфейсе.',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = (('user', 'monitor'),)
+        verbose_name = 'Доступ пользователя к монитору'
+        verbose_name_plural = 'Доступ пользователей к мониторам'
+        permissions = (
+            ('can_view_events', 'Can view events dashboard'),
+        )
+
+    def __str__(self):
+        return f"user_id={self.user_id} -> monitor_id={self.monitor_id}"
+
+
+class AlarmCase(models.Model):
+    """Дополнительная карточка к Alarm: описание/примечание + аудит."""
+
+    alarm = models.OneToOneField(
+        Alarm,
+        on_delete=models.CASCADE,
+        related_name='case',
+    )
+    description = models.TextField(blank=True, verbose_name='Описание')
+    note = models.TextField(blank=True, verbose_name='Примечание')
+
+    created_by = models.ForeignKey(
+        User,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='alarm_cases_created',
+    )
+    updated_by = models.ForeignKey(
+        User,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='alarm_cases_updated',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = 'Карточка события'
+        verbose_name_plural = 'Карточки событий'
+
+    def __str__(self):
+        return f"AlarmCase(alarm_id={getattr(self.alarm, 'alarm_id', self.alarm_id)})"
+
+
+def _alarm_document_upload_to(instance: 'AlarmDocument', filename: str) -> str:
+    # Не используем id Alarm напрямую в пути (он может быть None при создании),
+    # но в большинстве случаев case/alarm уже существуют.
+    alarm_id = ""
+    try:
+        alarm_id = str(getattr(instance.case.alarm, 'alarm_id', '') or '')
+    except Exception:
+        alarm_id = ""
+    alarm_id = alarm_id.replace('/', '_')[:64]
+    return f"alarm_docs/{alarm_id or 'unknown'}/{timezone.now().strftime('%Y/%m/%d')}/{filename}"
+
+
+class AlarmDocument(models.Model):
+    """Документ/изображение, прикреплённое к AlarmCase."""
+
+    case = models.ForeignKey(AlarmCase, on_delete=models.CASCADE, related_name='documents')
+    file = models.FileField(upload_to=_alarm_document_upload_to)
+    title = models.CharField(max_length=255, blank=True, verbose_name='Название')
+    uploaded_by = models.ForeignKey(
+        User,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='alarm_documents_uploaded',
+    )
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = 'Документ события'
+        verbose_name_plural = 'Документы событий'
+        ordering = ('-uploaded_at',)
+
+    def __str__(self):
+        return f"AlarmDocument(case_id={self.case_id}, file={getattr(self.file, 'name', '')})"
     
     
 class TelegramSubscriber(models.Model):

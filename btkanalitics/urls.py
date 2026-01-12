@@ -16,11 +16,17 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import path, include
+from django.conf import settings
+from django.conf.urls.static import static
 from agromash import views as agromash_views
 
 urlpatterns = [
     path('admin/system-status/logs/', agromash_views.admin_systemd_log, name='admin_systemd_log'),
     path('admin/system-status/', agromash_views.admin_system_status, name='admin_system_status'),
     path('admin/', admin.site.urls),
+    path('accounts/', include('django.contrib.auth.urls')),
     path('agromash/', include('agromash.urls')),
 ]
+
+if settings.DEBUG:
+    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

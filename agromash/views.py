@@ -4,6 +4,8 @@ from django.http import JsonResponse
 from django.conf import settings
 from django.contrib import admin as django_admin
 from django.contrib.admin.views.decorators import staff_member_required
+from django.contrib.auth.decorators import login_required
+from django.core.exceptions import PermissionDenied
 from django.template.response import TemplateResponse
 from django.views.decorators.csrf import csrf_exempt
 import subprocess
@@ -19,7 +21,17 @@ from .models import (
     Monitor,
     ReportRunLog,
     TelegramEventLog,
+    UserMonitorAccess,
 )
+
+
+def _assert_events_access(user) -> None:
+    # same logic as in views_events.py
+    if getattr(user, 'is_staff', False) or getattr(user, 'is_superuser', False):
+        return
+    if user.has_perm('agromash.can_view_events'):
+        return
+    raise PermissionDenied
 
 from .va_api_client import VAApiClient
 
@@ -210,7 +222,7 @@ def admin_systemd_log(request):
     return JsonResponse(_journal_tail(unit=unit, lines=100))
 
 
-@staff_member_required
+@login_required
 def serve_snapshot(request, alarm_id):
     """
     View для отображения изображения с использованием Bearer токена
@@ -219,6 +231,32 @@ def serve_snapshot(request, alarm_id):
         alarm = Alarm.objects.get(alarm_id=alarm_id)
     except Alarm.DoesNotExist:
         raise Http404("Alarm not found")
+
+    # Доступ к snapshot:
+    # - staff/superuser: разрешаем всегда
+    # - обычный пользователь: только если монитор разрешен через UserMonitorAccess
+    user = getattr(request, 'user', None)
+    _assert_events_access(user)
+    if not (getattr(user, 'is_staff', False) or getattr(user, 'is_superuser', False)):
+        monitor_pk = getattr(alarm, 'monitor_ref_id', None)
+        if not monitor_pk:
+            # best-effort: сопоставим по числовому Alarm.monitor_id
+            try:
+                m = Monitor.objects.filter(monitor_id=str(int(alarm.monitor_id))).only('id').first()
+                monitor_pk = m.id if m else None
+            except Exception:
+                monitor_pk = None
+
+        if not monitor_pk:
+            raise Http404("Monitor not found")
+
+        allowed = UserMonitorAccess.objects.filter(
+            user_id=getattr(user, 'id', None),
+            monitor_id=int(monitor_pk),
+            enabled=True,
+        ).exists()
+        if not allowed:
+            raise Http404("Forbidden")
     
     # Важно для первичного запуска: если токенов ещё нет в БД,
     # VAApiClient сам выполнит login и сохранит их.

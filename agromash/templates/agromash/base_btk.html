@@ -1,0 +1,44 @@
+{% load static %}
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{% block title %}BTK Analitics{% endblock %}</title>
+  <link rel="icon" href="{% static 'agromash/favicon.svg' %}" />
+  <link rel="stylesheet" href="{% static 'agromash/btk.css' %}" />
+</head>
+<body>
+  <header class="btk-header">
+    <div class="btk-header__inner">
+      <a class="btk-brand" href="{% url 'events_list' %}">
+        <img class="btk-brand__logo" src="{% static 'agromash/btk-logo.svg' %}" alt="Белтелеком" />
+        <span class="btk-brand__title">BTK Analitics</span>
+      </a>
+
+      <div class="btk-header__right">
+        <nav class="btk-nav">
+          <a class="btk-nav__link" href="{% url 'events_list' %}">События</a>
+          {% if request.user.username == 'admin' %}
+            <a class="btk-nav__link" href="/admin/">Admin</a>
+          {% endif %}
+        </nav>
+
+        <div class="btk-user">
+          <span class="btk-user__name">{{ request.user.username }}</span>
+          <form class="btk-user__logout" method="post" action="{% url 'logout' %}">
+            {% csrf_token %}
+            <button class="btk-btn btk-btn--ghost btk-btn--small" type="submit">Выйти</button>
+          </form>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main class="btk-main">
+    {% block content %}{% endblock %}
+  </main>
+
+  {% block scripts %}{% endblock %}
+</body>
+</html>

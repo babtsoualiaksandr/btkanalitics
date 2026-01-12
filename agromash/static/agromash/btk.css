@@ -1,0 +1,354 @@
+:root {
+  --btk-blue: #0072ce;
+  --btk-blue-2: #005aa3;
+  --btk-bg: #f5f7fb;
+  --btk-card: #ffffff;
+  --btk-text: #0b1320;
+  --btk-muted: #556275;
+  --btk-border: #d9e2ef;
+  --btk-danger: #b71c1c;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  color: var(--btk-text);
+  background: var(--btk-bg);
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+}
+
+code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+}
+
+.btk-header {
+  background: linear-gradient(90deg, var(--btk-blue), var(--btk-blue-2));
+  color: #fff;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.15);
+}
+
+.btk-header__inner {
+  max-width: 1200px;
+  margin: 0 auto;
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: center;
+  padding: 12px 16px;
+}
+
+.btk-header__right {
+  display: inline-flex;
+  gap: 14px;
+  align-items: center;
+}
+
+.btk-brand {
+  display: inline-flex;
+  gap: 10px;
+  align-items: center;
+  text-decoration: none;
+  color: #fff;
+}
+
+.btk-brand__logo { height: 30px; width: auto; }
+.btk-brand__title { font-weight: 700; letter-spacing: 0.2px; }
+
+.btk-nav { display: inline-flex; gap: 10px; }
+.btk-nav__link {
+  color: rgba(255,255,255,0.95);
+  text-decoration: none;
+  padding: 6px 10px;
+  border-radius: 8px;
+}
+.btk-nav__link:hover { background: rgba(255,255,255,0.12); }
+
+.btk-user { display: inline-flex; gap: 10px; align-items: center; }
+.btk-user__name { font-size: 14px; opacity: 0.95; }
+.btk-user__logout { margin: 0; }
+
+/* Кнопка "Выйти" находится в шапке на тёмном фоне.
+   Базовый .btk-btn--ghost использует тёмно-синий текст, который там плохо читается,
+   поэтому в контексте .btk-header делаем "ghost" светлым. */
+.btk-header .btk-btn--ghost {
+  color: rgba(255,255,255,0.95);
+  border-color: rgba(255,255,255,0.35);
+}
+
+.btk-header .btk-btn--ghost:hover {
+  background: rgba(255,255,255,0.12);
+}
+
+.btk-main { padding: 20px 0; }
+.btk-container { max-width: 1200px; margin: 0 auto; padding: 0 16px; }
+
+.btk-card {
+  background: var(--btk-card);
+  border: 1px solid var(--btk-border);
+  border-radius: 12px;
+  padding: 16px;
+  margin: 12px 0;
+  box-shadow: 0 1px 0 rgba(10, 24, 45, 0.03);
+}
+
+.btk-card__header { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+
+.btk-h1 { font-size: 22px; margin: 0 0 10px; }
+.btk-h2 { font-size: 18px; margin: 0; }
+.btk-h3 { font-size: 16px; margin: 10px 0; }
+
+.btk-muted { color: var(--btk-muted); font-size: 12px; }
+.btk-strong { font-weight: 600; }
+
+.btk-form { display: grid; gap: 12px; }
+.btk-grid {
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr;
+  gap: 12px;
+}
+
+/* Сетка фильтров на /agromash/events */
+.btk-grid--filters {
+  grid-template-columns: 2fr 1fr 1fr 0.6fr;
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .btk-header__inner { grid-template-columns: 1fr; }
+  .btk-grid,
+  .btk-grid--filters { grid-template-columns: 1fr; }
+}
+
+.btk-field { display: grid; gap: 6px; }
+.btk-label { font-size: 12px; font-weight: 600; color: var(--btk-muted); }
+.btk-hint { color: var(--btk-muted); font-size: 12px; }
+
+.btk-input, select, textarea {
+  width: 100%;
+  padding: 10px 10px;
+  border: 1px solid var(--btk-border);
+  border-radius: 10px;
+  outline: none;
+  background: #fff;
+  font-size: 14px;
+}
+
+select[multiple] {
+  min-height: 96px;
+  padding: 6px;
+}
+
+input[type="datetime-local"],
+input[type="date"],
+input[type="time"] {
+  padding: 9px 10px;
+}
+
+/* Современный вид datetime-local */
+input[type="datetime-local"].btk-input,
+input[type="datetime-local"],
+input[type="date"].btk-input,
+input[type="date"],
+input[type="time"].btk-input,
+input[type="time"] {
+  border: 1px solid var(--btk-border);
+  background: #fff;
+  border-radius: 10px;
+  color: var(--btk-text);
+}
+
+.btk-input:focus,
+select:focus,
+textarea:focus,
+input[type="datetime-local"]:focus,
+input[type="date"]:focus,
+input[type="time"]:focus {
+  border-color: rgba(0, 114, 206, 0.55);
+  box-shadow: 0 0 0 3px rgba(0, 114, 206, 0.18);
+}
+
+/* В фильтрах даты выглядят слишком «широко» — визуально ограничиваем и выравниваем слева */
+.btk-grid .btk-field:nth-child(2) .btk-input,
+.btk-grid .btk-field:nth-child(3) .btk-input,
+.btk-grid .btk-field:nth-child(2) input[type="datetime-local"],
+.btk-grid .btk-field:nth-child(3) input[type="datetime-local"] {
+  max-width: 320px;
+  justify-self: start;
+}
+
+textarea.btk-textarea { resize: vertical; }
+
+.btk-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+
+.btk-btn {
+  appearance: none;
+  border: 1px solid var(--btk-blue-2);
+  background: var(--btk-blue);
+  color: #fff;
+  padding: 9px 12px;
+  border-radius: 10px;
+  cursor: pointer;
+  font-weight: 600;
+}
+.btk-btn:hover { background: var(--btk-blue-2); }
+
+.btk-btn--ghost {
+  background: transparent;
+  color: var(--btk-blue-2);
+  border-color: var(--btk-border);
+}
+.btk-btn--ghost:hover { background: rgba(0, 114, 206, 0.08); }
+
+.btk-btn--danger {
+  background: var(--btk-danger);
+  border-color: var(--btk-danger);
+}
+.btk-btn--danger:hover { filter: brightness(0.92); }
+
+.btk-btn--small { padding: 6px 9px; border-radius: 9px; font-size: 12px; }
+
+.btk-alert { padding: 10px 12px; border-radius: 10px; border: 1px solid var(--btk-border); }
+.btk-alert--danger { border-color: rgba(183, 28, 28, 0.35); background: rgba(183, 28, 28, 0.06); color: #6a1010; }
+
+.btk-tablewrap { overflow: auto; }
+.btk-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.btk-table thead tr { border-bottom: 1px solid var(--btk-border); }
+.btk-table th, .btk-table td {
+  border-top: 1px solid var(--btk-border);
+  padding: 10px;
+  vertical-align: top;
+}
+.btk-table th {
+  text-align: left;
+  font-size: 12px;
+  color: var(--btk-muted);
+  background: #fbfcfe;
+}
+
+/* Sticky заголовок таблицы: 1-я строка заголовков + 2-я строка фильтров */
+.btk-table thead tr:first-child th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+.btk-table thead tr.btk-table__filters th {
+  position: sticky;
+  top: 38px;
+  z-index: 1;
+  padding: 6px 10px;
+}
+
+.btk-colfilter {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--btk-border);
+  border-radius: 10px;
+  font-size: 12px;
+  outline: none;
+}
+
+.btk-colfilter:focus {
+  border-color: rgba(0, 114, 206, 0.55);
+  box-shadow: 0 0 0 3px rgba(0, 114, 206, 0.18);
+}
+
+/* Ссылки сортировки в заголовках таблицы */
+.btk-thlink {
+  color: inherit;
+  text-decoration: none;
+}
+
+.btk-thlink:hover {
+  text-decoration: underline;
+}
+
+.btk-col-snap { width: 140px; }
+.btk-col-actions { width: 240px; }
+.btk-snap {
+  width: 120px;
+  height: 80px;
+  object-fit: contain;
+  border: 1px solid var(--btk-border);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.btk-details summary { cursor: pointer; font-weight: 600; color: var(--btk-blue-2); }
+.btk-details summary:hover { text-decoration: underline; }
+.btk-checkboxes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 12px; padding: 10px 0 0; }
+.btk-checkbox { display: inline-flex; gap: 8px; align-items: center; font-size: 13px; }
+
+/* Django CheckboxSelectMultiple для мониторов */
+.btk-monitors ul {
+  list-style: none;
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--btk-border);
+  border-radius: 10px;
+  background: #fff;
+  display: grid;
+  grid-template-columns: repeat(1, minmax(0, 1fr));
+  gap: 6px;
+  max-height: 140px;
+  overflow: auto;
+}
+
+.btk-monitors li label {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 13px;
+}
+
+.btk-dialog {
+  width: min(860px, calc(100vw - 24px));
+  border: 1px solid var(--btk-border);
+  border-radius: 14px;
+  padding: 0;
+}
+.btk-dialog::backdrop { background: rgba(11, 19, 32, 0.55); }
+.btk-dialog__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--btk-border);
+  background: #fbfcfe;
+}
+.btk-dialog__title { font-weight: 800; }
+.btk-dialog__body { padding: 14px; }
+
+.btk-dialog__body {
+  max-height: min(70vh, 760px);
+  overflow: auto;
+}
+
+.btk-hr { border: none; border-top: 1px solid var(--btk-border); margin: 14px 0; }
+
+.btk-docs { display: grid; gap: 10px; }
+.btk-doc {
+  border: 1px solid var(--btk-border);
+  border-radius: 12px;
+  padding: 10px;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
+  align-items: start;
+}
+.btk-doc__title { font-weight: 600; }
+.btk-doc__actions { display: inline-flex; gap: 8px; align-items: center; }
+.btk-doc__actions form { margin: 0; }
+
+.btk-login { max-width: 520px; margin: 40px auto 0; display: grid; gap: 16px; }
+.btk-login__brand { display: flex; align-items: center; gap: 10px; justify-content: center; }
+.btk-login__title { font-weight: 900; color: var(--btk-blue-2); letter-spacing: 0.2px; }
+
+/* Мелкие правки визуального баланса */
+.btk-card__header .btk-hint { margin-top: 2px; }
+.btk-col-actions { white-space: nowrap; }

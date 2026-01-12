@@ -74,6 +74,11 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
 
+# В браузерах COOP (Cross-Origin-Opener-Policy) игнорируется на непроверенных origin (например, http://10.x.x.x),
+# из-за чего в консоли появляется предупреждение. Для внутреннего HTTP-доступа отключаем заголовок.
+# Если проект будет обслуживаться по HTTPS — можно вернуть 'same-origin'.
+SECURE_CROSS_ORIGIN_OPENER_POLICY = None
+
 ROOT_URLCONF = 'btkanalitics.urls'
 
 TEMPLATES = [
@@ -151,6 +156,16 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 # https://docs.djangoproject.com/en/6.0/howto/static-files/
 
 STATIC_URL = 'static/'
+STATIC_ROOT = BASE_DIR / 'staticfiles'
+
+# Media uploads (AlarmDocument.file, etc.)
+MEDIA_URL = '/media/'
+MEDIA_ROOT = BASE_DIR / 'media'
+
+# Auth redirects
+LOGIN_URL = '/accounts/login/'
+LOGIN_REDIRECT_URL = '/agromash/events/'
+LOGOUT_REDIRECT_URL = '/accounts/login/'
 
 # -----------------
 # Celery

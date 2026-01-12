@@ -1,0 +1,342 @@
+{% extends 'agromash/base_btk.html' %}
+
+{% block title %}События — BTK Analitics{% endblock %}
+
+{% block content %}
+  <div class="btk-container">
+    <h1 class="btk-h1">События</h1>
+
+    <section class="btk-card">
+      <form class="btk-form js-alarm-filters" method="get" action="">
+        <div class="btk-grid btk-grid--filters">
+          <div class="btk-field">
+            <label class="btk-label">{{ form.monitors.label }}</label>
+            <div class="btk-monitors">{{ form.monitors }}</div>
+            <div class="btk-hint">Показываются мониторы, назначенные пользователю.</div>
+          </div>
+
+          <div class="btk-field">
+            <label class="btk-label">{{ form.date_from.label }}</label>
+            {{ form.date_from }}
+          </div>
+
+          <div class="btk-field">
+            <label class="btk-label">{{ form.date_to.label }}</label>
+            {{ form.date_to }}
+          </div>
+
+          <div class="btk-field">
+            <label class="btk-label">{{ form.limit.label }}</label>
+            {{ form.limit }}
+            <div class="btk-hint">Ограничение выдачи/экспорта.</div>
+          </div>
+        </div>
+
+        <div class="btk-actions">
+          <button class="btk-btn" type="submit">Применить</button>
+          <a class="btk-btn btk-btn--ghost" href="{% url 'events_list' %}">Сбросить</a>
+        </div>
+
+        {% if form.errors %}
+          <div class="btk-alert btk-alert--danger">Некорректные параметры фильтра.</div>
+        {% endif %}
+      </form>
+    </section>
+
+    <section class="btk-card">
+      <div class="btk-card__header">
+        <h2 class="btk-h2">Экспорт</h2>
+      </div>
+
+      <form class="btk-form" method="get" action="{% url 'events_export_xlsx' %}">
+        {# Пробрасываем текущие фильтры в экспорт #}
+        {% for v in selected_monitor_pks %}
+          <input type="hidden" name="monitors" value="{{ v }}" />
+        {% endfor %}
+        {% if date_from_raw %}<input type="hidden" name="date_from" value="{{ date_from_raw }}" />{% endif %}
+        {% if date_to_raw %}<input type="hidden" name="date_to" value="{{ date_to_raw }}" />{% endif %}
+        {% if limit_raw %}<input type="hidden" name="limit" value="{{ limit_raw }}" />{% endif %}
+
+        <details class="btk-details">
+          <summary>Поля Excel</summary>
+          <div class="btk-checkboxes">
+            {% for key,label in export_fields %}
+              <label class="btk-checkbox">
+                <input type="checkbox" name="fields" value="{{ key }}" {% if key in export_defaults %}checked{% endif %} />
+                <span>{{ label }}</span>
+              </label>
+            {% endfor %}
+          </div>
+        </details>
+
+        <div class="btk-actions">
+          <button class="btk-btn" type="submit">Экспорт в Excel</button>
+        </div>
+      </form>
+    </section>
+
+    <section class="btk-card">
+      <div class="btk-card__header">
+        <h2 class="btk-h2">Список событий</h2>
+        <div class="btk-hint">Показано до {{ limit_value }} записей.</div>
+      </div>
+
+      <div class="btk-tablewrap">
+        <table class="btk-table">
+          <thead>
+            <tr>
+              <th>Скриншот</th>
+              <th>
+                <a class="btk-thlink" href="{{ sort_urls.monitor }}">
+                  Monitor{% if sort == 'monitor' %}{% if dir == 'asc' %} ▲{% else %} ▼{% endif %}{% endif %}
+                </a>
+              </th>
+              <th>
+                <a class="btk-thlink" href="{{ sort_urls.topic }}">
+                  Topic{% if sort == 'topic' %}{% if dir == 'asc' %} ▲{% else %} ▼{% endif %}{% endif %}
+                </a>
+              </th>
+              <th>
+                <a class="btk-thlink" href="{{ sort_urls.plate }}">
+                  Plate{% if sort == 'plate' %}{% if dir == 'asc' %} ▲{% else %} ▼{% endif %}{% endif %}
+                </a>
+              </th>
+              <th>
+                <a class="btk-thlink" href="{{ sort_urls.time }}">
+                  Время{% if sort == 'time' %}{% if dir == 'asc' %} ▲{% else %} ▼{% endif %}{% endif %}
+                </a>
+              </th>
+              <th>Действия</th>
+            </tr>
+
+            {# Клиентская фильтрация по вхождению текста в колонках #}
+            <tr class="btk-table__filters">
+              <th></th>
+              <th><input class="btk-colfilter js-colfilter" type="text" inputmode="search" autocomplete="off" placeholder="Фильтр…" data-col="1" /></th>
+              <th><input class="btk-colfilter js-colfilter" type="text" inputmode="search" autocomplete="off" placeholder="Фильтр…" data-col="2" /></th>
+              <th><input class="btk-colfilter js-colfilter" type="text" inputmode="search" autocomplete="off" placeholder="Фильтр…" data-col="3" /></th>
+              <th><input class="btk-colfilter js-colfilter" type="text" inputmode="search" autocomplete="off" placeholder="Фильтр…" data-col="4" /></th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for a in alarms %}
+              <tr>
+                <td class="btk-col-snap">
+                  <a href="{% url 'serve_snapshot' a.alarm_id %}" target="_blank" rel="noopener">
+                    <img class="btk-snap" src="{% url 'serve_snapshot' a.alarm_id %}" alt="snapshot" loading="lazy" />
+                  </a>
+                </td>
+                <td>
+                  <div class="btk-strong">{{ a.monitor_name }}</div>
+                  <div class="btk-muted">alarm_id: <code>{{ a.alarm_id }}</code></div>
+                </td>
+                <td>
+                  <div class="btk-strong">{{ a.topic }}</div>
+                  <div class="btk-muted">event_id: <code>{{ a.event_id }}</code></div>
+                </td>
+                <td>
+                  {% if a.topic == 'PlateMatched' %}
+                    <div class="btk-strong">{{ a.plate_numbers }}</div>
+                  {% else %}
+                    <div class="btk-muted">-</div>
+                  {% endif %}
+                </td>
+                <td>
+                  <div>{{ a.start_dt_local|date:"Y-m-d H:i:s" }}</div>
+                  <div class="btk-muted">до {{ a.end_dt_local|date:"Y-m-d H:i:s" }}</div>
+                </td>
+                <td class="btk-col-actions">
+                  <button
+                    type="button"
+                    class="btk-btn btk-btn--small js-open-case"
+                    data-url="{% url 'alarm_case_modal' a.pk %}">
+                    Документы
+                  </button>
+                  <a class="btk-btn btk-btn--small btk-btn--ghost" href="{% url 'event_export_xlsx' a.pk %}">Xlsx</a>
+                  <a class="btk-btn btk-btn--small btk-btn--ghost" href="{% url 'event_export_pdf' a.pk %}">PDF</a>
+                </td>
+              </tr>
+            {% empty %}
+              <tr>
+                <td colspan="6" class="btk-muted">Нет событий по выбранным фильтрам.</td>
+              </tr>
+            {% endfor %}
+
+            {# Плашка для клиентской фильтрации (когда строки есть, но все отфильтрованы) #}
+            <tr class="js-client-empty" style="display:none">
+              <td colspan="6" class="btk-muted">Нет строк по текстовому фильтру.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+
+  <dialog class="btk-dialog" id="caseDialog">
+    <div class="btk-dialog__header">
+      <div class="btk-dialog__title">Карточка события</div>
+      <button class="btk-btn btk-btn--ghost btk-btn--small" type="button" id="caseDialogClose">Закрыть</button>
+    </div>
+    <div class="btk-dialog__body" id="caseDialogBody">
+      <div class="btk-muted">Загрузка…</div>
+    </div>
+  </dialog>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  function getCookie(name) {
+    const value = `; ${document.cookie}`;
+    const parts = value.split(`; ${name}=`);
+    if (parts.length === 2) return parts.pop().split(';').shift();
+    return null;
+  }
+
+  const dlg = document.getElementById('caseDialog');
+  const dlgBody = document.getElementById('caseDialogBody');
+  const closeBtn = document.getElementById('caseDialogClose');
+
+  async function loadCase(url) {
+    dlgBody.innerHTML = '<div class="btk-muted">Загрузка…</div>';
+    const resp = await fetch(url, { headers: { 'X-Requested-With': 'XMLHttpRequest' } });
+    dlgBody.innerHTML = await resp.text();
+  }
+
+  document.addEventListener('click', async (e) => {
+    const btn = e.target.closest('.js-open-case');
+    if (!btn) return;
+    const url = btn.getAttribute('data-url');
+    await loadCase(url);
+    dlg.showModal();
+  });
+
+  closeBtn.addEventListener('click', () => dlg.close());
+  dlg.addEventListener('click', (e) => {
+    // клик по подложке
+    const rect = dlg.getBoundingClientRect();
+    const inDialog = (rect.top <= e.clientY && e.clientY <= rect.top + rect.height && rect.left <= e.clientX && e.clientX <= rect.left + rect.width);
+    if (!inDialog) dlg.close();
+  });
+
+  // AJAX submit внутри модалки (включая загрузку файлов)
+  dlgBody.addEventListener('submit', async (e) => {
+    const form = e.target;
+    if (!(form instanceof HTMLFormElement)) return;
+    e.preventDefault();
+    const url = form.action;
+    const fd = new FormData(form);
+    const resp = await fetch(url, {
+      method: 'POST',
+      body: fd,
+      headers: {
+        'X-Requested-With': 'XMLHttpRequest',
+        'X-CSRFToken': getCookie('csrftoken') || ''
+      }
+    });
+    dlgBody.innerHTML = await resp.text();
+  });
+
+  // Автосабмит фильтров (GET) при изменении значений в AlarmFilterForm.
+  // Это даёт ререндер страницы без нажатия кнопки «Применить».
+  const filtersForm = document.querySelector('form.js-alarm-filters');
+  if (filtersForm instanceof HTMLFormElement) {
+    let t = null;
+
+    function scheduleFiltersSubmit() {
+      if (t) window.clearTimeout(t);
+      t = window.setTimeout(() => {
+        // requestSubmit сохраняет нативную валидацию (если появится) и событие submit.
+        if (typeof filtersForm.requestSubmit === 'function') {
+          filtersForm.requestSubmit();
+        } else {
+          filtersForm.submit();
+        }
+      }, 350);
+    }
+
+    filtersForm.addEventListener('change', (e) => {
+      const el = e.target;
+      if (!(el instanceof HTMLInputElement || el instanceof HTMLSelectElement || el instanceof HTMLTextAreaElement)) return;
+      if (el.disabled) return;
+      if (el.type === 'submit' || el.type === 'button') return;
+      scheduleFiltersSubmit();
+    });
+
+    // datetime-local может вводиться вручную — подстраховываемся input-событием.
+    filtersForm.addEventListener('input', (e) => {
+      const el = e.target;
+      if (!(el instanceof HTMLInputElement)) return;
+      if (el.disabled) return;
+      if (el.type !== 'datetime-local') return;
+      scheduleFiltersSubmit();
+    });
+  }
+
+  // Клиентская фильтрация строк таблицы по вхождению текста в колонках.
+  // Работает поверх уже отрендеренных данных (до {{ limit_value }} строк).
+  const table = document.querySelector('.btk-table');
+  if (table instanceof HTMLTableElement) {
+    const inputs = Array.from(table.querySelectorAll('thead .js-colfilter'))
+      .filter((x) => x instanceof HTMLInputElement);
+    const tbody = table.tBodies && table.tBodies.length ? table.tBodies[0] : null;
+    const emptyRow = tbody ? tbody.querySelector('.js-client-empty') : null;
+
+    function applyTableTextFilters() {
+      if (!tbody) return;
+
+      const filters = inputs
+        .map((inp) => {
+          const col = parseInt(inp.dataset.col || '', 10);
+          const q = (inp.value || '').trim().toLowerCase();
+          return { col, q };
+        })
+        .filter((f) => Number.isFinite(f.col) && f.col >= 0 && !!f.q);
+
+      // Строки с данными (исключаем служебные)
+      const rows = Array.from(tbody.rows)
+        .filter((r) => !(r instanceof HTMLTableRowElement ? r.classList.contains('js-client-empty') : false));
+
+      let visibleCount = 0;
+      let dataRowsTotal = 0;
+      for (const r of rows) {
+        // Не трогаем серверную строку "нет событий" (у неё colspan)
+        const hasColspan = Array.from(r.cells).some((c) => c instanceof HTMLTableCellElement && c.colSpan > 1);
+        if (hasColspan) continue;
+
+        dataRowsTotal += 1;
+
+        let ok = true;
+        for (const f of filters) {
+          const cell = r.cells[f.col];
+          const text = (cell ? (cell.innerText || cell.textContent || '') : '').toLowerCase();
+          if (!text.includes(f.q)) {
+            ok = false;
+            break;
+          }
+        }
+
+        r.style.display = ok ? '' : 'none';
+        if (ok) visibleCount += 1;
+      }
+
+      // Плашка "нет строк по текстовому фильтру"
+      if (emptyRow instanceof HTMLElement) {
+        const hasFilters = filters.length > 0;
+        emptyRow.style.display = (hasFilters && dataRowsTotal > 0 && visibleCount === 0) ? '' : 'none';
+      }
+    }
+
+    let ft = null;
+    function scheduleTableTextFilters() {
+      if (ft) window.clearTimeout(ft);
+      ft = window.setTimeout(applyTableTextFilters, 150);
+    }
+
+    for (const inp of inputs) {
+      inp.addEventListener('input', scheduleTableTextFilters);
+      inp.addEventListener('change', scheduleTableTextFilters);
+    }
+  }
+</script>
+{% endblock %}

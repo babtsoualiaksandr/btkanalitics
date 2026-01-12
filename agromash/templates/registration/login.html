@@ -1,0 +1,48 @@
+{% load static %}
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Вход — BTK Analitics</title>
+  <link rel="icon" href="{% static 'agromash/favicon.svg' %}" />
+  <link rel="stylesheet" href="{% static 'agromash/btk.css' %}" />
+</head>
+<body>
+  <main class="btk-main">
+    <div class="btk-container">
+      <div class="btk-login">
+        <div class="btk-login__brand">
+          <img class="btk-brand__logo" src="{% static 'agromash/btk-logo.svg' %}" alt="Белтелеком" />
+          <div class="btk-login__title">BTK Analitics</div>
+        </div>
+
+        <div class="btk-card">
+          <h1 class="btk-h1">Вход</h1>
+
+          {% if form.errors %}
+            <div class="btk-alert btk-alert--danger">Неверный логин или пароль.</div>
+          {% endif %}
+
+          <form class="btk-form" method="post" action="{% url 'login' %}">
+            {% csrf_token %}
+            <div class="btk-field">
+              <label class="btk-label" for="id_username">Логин</label>
+              <input class="btk-input" id="id_username" name="username" type="text" autocomplete="username" required />
+            </div>
+            <div class="btk-field">
+              <label class="btk-label" for="id_password">Пароль</label>
+              <input class="btk-input" id="id_password" name="password" type="password" autocomplete="current-password" required />
+            </div>
+            <input type="hidden" name="next" value="{{ next|default:'/agromash/events/' }}" />
+            <div class="btk-actions">
+              <button class="btk-btn" type="submit">Войти</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  </main>
+</body>
+</html>
+

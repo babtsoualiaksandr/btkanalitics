@@ -1,11 +1,21 @@
 from django.urls import path
 from . import views
 from . import views_tg
+from . import views_events
 
 urlpatterns = [
     path('start-parsing/', views.start_parsing, name='start_parsing'),
     path('snapshot/<str:alarm_id>/', views.serve_snapshot, name='serve_snapshot'),
     path('system-status/', views.system_status, name='system_status'),
+
+    # Events dashboard (non-admin)
+    path('events/', views_events.events_list, name='events_list'),
+    path('events/export.xlsx', views_events.events_export_xlsx, name='events_export_xlsx'),
+    path('events/alarm/<int:alarm_pk>/export.xlsx', views_events.event_export_xlsx, name='event_export_xlsx'),
+    path('events/alarm/<int:alarm_pk>/export.pdf', views_events.event_export_pdf, name='event_export_pdf'),
+    path('events/alarm/<int:alarm_pk>/case/', views_events.alarm_case_modal, name='alarm_case_modal'),
+    path('events/docs/<int:doc_pk>/file/', views_events.alarm_document_file, name='alarm_document_file'),
+    path('events/docs/<int:doc_pk>/delete/', views_events.alarm_document_delete, name='alarm_document_delete'),
 
     # Telegram Mini App
     path('tg/', views_tg.tg_app, name='tg_app'),

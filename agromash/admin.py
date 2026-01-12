@@ -18,6 +18,8 @@ from django.template.response import TemplateResponse
 from .models import (
     AccountVideoAnalytics,
     Alarm,
+    AlarmCase,
+    AlarmDocument,
     FuelOperation,
     FuelReport,
     Monitor,
@@ -25,6 +27,7 @@ from .models import (
     TelegramReportSubscription,
     TelegramSubscriber,
     TelegramSubscriberMonitorSubscription,
+    UserMonitorAccess,
 )
 
 from .tasks import parse_event_task, request_stop_parser
@@ -75,6 +78,24 @@ class UserChangeFormWithPassword(DjangoUserChangeForm):
         required=False,
     )
 
+    # --- Доступ к мониторам (через UserMonitorAccess) ---
+    all_monitors = forms.BooleanField(
+        label="Доступ ко всем мониторам",
+        required=False,
+        help_text="Если включено — пользователю будут назначены все мониторы.",
+    )
+    monitors = forms.ModelMultipleChoiceField(
+        label="Мониторы",
+        queryset=Monitor.objects.all().order_by("monitor_id"),
+        required=False,
+        widget=forms.CheckboxSelectMultiple(
+            attrs={
+                "class": "agromash-subscribed-monitors",
+            }
+        ),
+        help_text="Выберите один или несколько мониторов для просмотра событий.",
+    )
+
     def clean(self):
         cleaned = super().clean()
         p1 = cleaned.get("new_password1")
@@ -91,6 +112,21 @@ class UserChangeFormWithPassword(DjangoUserChangeForm):
         password_validation.validate_password(p1, self.instance)
         return cleaned
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Инициализация списка мониторов из UserMonitorAccess
+        if self.instance and self.instance.pk:
+            qs = Monitor.objects.filter(
+                user_accesses__user=self.instance,
+                user_accesses__enabled=True,
+            ).order_by("monitor_id")
+            self.fields["monitors"].initial = list(qs)
+            # Если назначены все мониторы — выставим флаг (best-effort)
+            try:
+                self.fields["all_monitors"].initial = (qs.count() == Monitor.objects.count())
+            except Exception:
+                self.fields["all_monitors"].initial = False
+
     def save(self, commit=True):
         user = super().save(commit=False)
         p1 = self.cleaned_data.get("new_password1")
@@ -100,6 +136,19 @@ class UserChangeFormWithPassword(DjangoUserChangeForm):
         if commit:
             user.save()
             self.save_m2m()
+
+            # синхронизируем доступ к мониторам
+            if user.pk:
+                all_monitors = bool(self.cleaned_data.get("all_monitors"))
+                monitors = (
+                    list(Monitor.objects.all().order_by("monitor_id"))
+                    if all_monitors
+                    else list(self.cleaned_data.get("monitors") or [])
+                )
+                UserMonitorAccess.objects.filter(user=user).delete()
+                UserMonitorAccess.objects.bulk_create(
+                    [UserMonitorAccess(user=user, monitor=m, enabled=True) for m in monitors]
+                )
         return user
 
 
@@ -114,6 +163,15 @@ class UserAdminWithPassword(DjangoUserAdmin):
                 "fields": (
                     "new_password1",
                     "new_password2",
+                )
+            },
+        ),
+        (
+            "Доступ к мониторам",
+            {
+                "fields": (
+                    "all_monitors",
+                    "monitors",
                 )
             },
         ),
@@ -608,6 +666,71 @@ class MonitorAdmin(admin.ModelAdmin):
 
     subscribers_count.short_description = 'Подписчиков'
     subscribers_count.admin_order_field = '_subscribers_count'
+
+
+@admin.register(UserMonitorAccess)
+class UserMonitorAccessAdmin(admin.ModelAdmin):
+    list_display = (
+        'user',
+        'monitor',
+        'enabled',
+        'created_at',
+    )
+    list_filter = (
+        'enabled',
+        'monitor',
+    )
+    search_fields = (
+        'user__username',
+        'user__email',
+        'monitor__monitor_id',
+        'monitor__monitor_name',
+    )
+    autocomplete_fields = (
+        'user',
+        'monitor',
+    )
+
+    # Оставляем этот ModelAdmin только для просмотра/поиска (источник истины — форма User).
+
+
+@admin.register(AlarmCase)
+class AlarmCaseAdmin(admin.ModelAdmin):
+    list_display = (
+        'alarm',
+        'created_at',
+        'updated_at',
+        'created_by',
+        'updated_by',
+    )
+    search_fields = (
+        'alarm__alarm_id',
+        'alarm__monitor_name',
+        'description',
+        'note',
+    )
+    autocomplete_fields = ('alarm', 'created_by', 'updated_by')
+    readonly_fields = ('created_at', 'updated_at')
+
+
+@admin.register(AlarmDocument)
+class AlarmDocumentAdmin(admin.ModelAdmin):
+    list_display = (
+        'id',
+        'case',
+        'title',
+        'file',
+        'uploaded_by',
+        'uploaded_at',
+    )
+    search_fields = (
+        'case__alarm__alarm_id',
+        'title',
+        'file',
+    )
+    list_filter = ('uploaded_at',)
+    autocomplete_fields = ('case', 'uploaded_by')
+    readonly_fields = ('uploaded_at',)
 
 
 @admin.register(TelegramReportSubscription)
