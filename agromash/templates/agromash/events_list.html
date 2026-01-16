@@ -119,54 +119,8 @@
               <th></th>
             </tr>
           </thead>
-          <tbody>
-            {% for a in alarms %}
-              <tr>
-                <td class="btk-col-snap">
-                  <a href="{% url 'serve_snapshot' a.alarm_id %}" target="_blank" rel="noopener">
-                    <img class="btk-snap" src="{% url 'serve_snapshot' a.alarm_id %}" alt="snapshot" loading="lazy" />
-                  </a>
-                </td>
-                <td>
-                  <div class="btk-strong">{{ a.monitor_name }}</div>
-                  <div class="btk-muted">alarm_id: <code>{{ a.alarm_id }}</code></div>
-                </td>
-                <td>
-                  <div class="btk-strong">{{ a.topic }}</div>
-                  <div class="btk-muted">event_id: <code>{{ a.event_id }}</code></div>
-                </td>
-                <td>
-                  {% if a.topic == 'PlateMatched' %}
-                    <div class="btk-strong">{{ a.plate_numbers }}</div>
-                  {% else %}
-                    <div class="btk-muted">-</div>
-                  {% endif %}
-                </td>
-                <td>
-                  <div>{{ a.start_dt_local|date:"Y-m-d H:i:s" }}</div>
-                  <div class="btk-muted">до {{ a.end_dt_local|date:"Y-m-d H:i:s" }}</div>
-                </td>
-                <td class="btk-col-actions">
-                  <button
-                    type="button"
-                    class="btk-btn btk-btn--small js-open-case"
-                    data-url="{% url 'alarm_case_modal' a.pk %}">
-                    Документы
-                  </button>
-                  <a class="btk-btn btk-btn--small btk-btn--ghost" href="{% url 'event_export_xlsx' a.pk %}">Xlsx</a>
-                  <a class="btk-btn btk-btn--small btk-btn--ghost" href="{% url 'event_export_pdf' a.pk %}">PDF</a>
-                </td>
-              </tr>
-            {% empty %}
-              <tr>
-                <td colspan="6" class="btk-muted">Нет событий по выбранным фильтрам.</td>
-              </tr>
-            {% endfor %}
-
-            {# Плашка для клиентской фильтрации (когда строки есть, но все отфильтрованы) #}
-            <tr class="js-client-empty" style="display:none">
-              <td colspan="6" class="btk-muted">Нет строк по текстовому фильтру.</td>
-            </tr>
+          <tbody id="alarmsTbody" data-refresh-url="{% url 'events_table_body' %}">
+            {% include 'agromash/_events_table_body.html' %}
           </tbody>
         </table>
       </div>
@@ -273,6 +227,8 @@
     });
   }
 
+  let applyTableTextFilters = null;
+
   // Клиентская фильтрация строк таблицы по вхождению текста в колонках.
   // Работает поверх уже отрендеренных данных (до {{ limit_value }} строк).
   const table = document.querySelector('.btk-table');
@@ -280,10 +236,11 @@
     const inputs = Array.from(table.querySelectorAll('thead .js-colfilter'))
       .filter((x) => x instanceof HTMLInputElement);
     const tbody = table.tBodies && table.tBodies.length ? table.tBodies[0] : null;
-    const emptyRow = tbody ? tbody.querySelector('.js-client-empty') : null;
 
-    function applyTableTextFilters() {
+    applyTableTextFilters = function () {
       if (!tbody) return;
+
+      const emptyRow = tbody.querySelector('.js-client-empty');
 
       const filters = inputs
         .map((inp) => {
@@ -337,6 +294,44 @@
       inp.addEventListener('input', scheduleTableTextFilters);
       inp.addEventListener('change', scheduleTableTextFilters);
     }
+
+    // первичный прогон (на случай автозаполнения браузером)
+    applyTableTextFilters();
+  }
+
+  // Автообновление таблицы при появлении новых Alarm: подгружаем только <tbody>.
+  const tbodyEl = document.getElementById('alarmsTbody');
+  if (tbodyEl instanceof HTMLElement) {
+    const refreshBase = tbodyEl.getAttribute('data-refresh-url') || '';
+
+    async function refreshTableBody() {
+      if (!refreshBase) return;
+      if (document.hidden) return;
+
+      // Собираем querystring из текущих фильтров формы, но сохраняем sort/dir из URL.
+      const params = new URLSearchParams(window.location.search || '');
+      if (filtersForm instanceof HTMLFormElement) {
+        for (const k of ['monitors', 'date_from', 'date_to', 'limit']) params.delete(k);
+        const fd = new FormData(filtersForm);
+        for (const [k, v] of fd.entries()) params.append(String(k), String(v));
+      }
+      const qs = params.toString();
+      const url = refreshBase + (qs ? `?${qs}` : '');
+      const resp = await fetch(url, { headers: { 'X-Requested-With': 'XMLHttpRequest' } });
+      if (!resp.ok) return;
+
+      const html = await resp.text();
+      // Обновляем только строки. События/кнопки в таблице работают через делегирование.
+      tbodyEl.innerHTML = html;
+
+      // Применяем клиентские текстовые фильтры повторно (если включены).
+      if (typeof applyTableTextFilters === 'function') {
+        applyTableTextFilters();
+      }
+    }
+
+    // Интервал обновления можно подобрать по нагрузке/ожиданиям.
+    window.setInterval(refreshTableBody, 10000);
   }
 </script>
 {% endblock %}

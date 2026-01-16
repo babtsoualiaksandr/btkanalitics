@@ -1,6 +1,122 @@
-from django.db import models
+import logging
+
+from django.conf import settings
+from django.db import models, transaction
 from django.contrib.auth.models import User
 from django.utils import timezone
+
+from agromash.services.telegram_client import send_message
+
+
+logger = logging.getLogger(__name__)
+
+
+def _va_status_icon(status: str) -> str:
+    # Не ссылаемся на `AccountVideoAnalytics.*` здесь, чтобы избежать проблем
+    # с порядком объявления (модуль импортируется целиком).
+    return {
+        "running": "🟢",
+        "starting": "🟡",
+        "stopping": "🟡",
+        "stopped": "⚪️",
+        "error": "🔴",
+    }.get(str(status or ""), "🔔")
+
+
+def _notify_va_parser_status_change(
+    *,
+    account_id: int,
+    name: str,
+    organization: str,
+    old_status: str,
+    new_status: str,
+    source: str,
+) -> None:
+    """Best-effort: уведомить админов в Telegram о смене parser_status."""
+
+    raw = getattr(settings, "TLG_CHAT_ID_ADMINS", None) or []
+    chat_ids: list[int] = []
+    for x in raw:
+        try:
+            chat_ids.append(int(str(x).strip()))
+        except Exception:
+            continue
+    if not chat_ids:
+        return
+
+    text = (
+        f"{_va_status_icon(new_status)} <b>VA parser status changed</b>\n"
+        f"Account: <code>#{account_id}</code> {name} | {organization}\n"
+        f"Status: <b>{old_status}</b> → <b>{new_status}</b>\n"
+        f"At: {timezone.now().strftime('%Y-%m-%d %H:%M:%S %Z')}"
+    )
+
+    meta = {
+        "source": source,
+        "model": "AccountVideoAnalytics",
+        "account_id": account_id,
+        "old_status": old_status,
+        "new_status": new_status,
+    }
+
+    for cid in chat_ids:
+        try:
+            send_message(
+                chat_id=int(cid),
+                text=text,
+                parse_mode="HTML",
+                disable_web_page_preview=True,
+                meta=meta,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to notify admins about parser_status change (account_id=%s, chat_id=%s)",
+                account_id,
+                cid,
+            )
+
+
+class AccountVideoAnalyticsQuerySet(models.QuerySet):
+    def update(self, **kwargs):
+        """Перехватываем `QuerySet.update(parser_status=...)` для оповещений.
+
+        Django `.update()` не вызывает `.save()` и не шлёт сигналы, поэтому уведомление
+        делаем здесь (best-effort).
+        """
+
+        if "parser_status" not in kwargs:
+            return super().update(**kwargs)
+
+        new_status = kwargs.get("parser_status")
+        # если это не простое значение (F/Func) — не можем корректно сравнить
+        if not isinstance(new_status, str):
+            return super().update(**kwargs)
+
+        # best-effort: собираем текущие значения до апдейта
+        rows = list(self.values_list("id", "name", "organization", "parser_status"))
+        updated = super().update(**kwargs)
+        if not updated or not rows:
+            return updated
+
+        def _notify() -> None:
+            for (acc_id, name, org, old_status) in rows:
+                if old_status == new_status:
+                    continue
+                _notify_va_parser_status_change(
+                    account_id=int(acc_id),
+                    name=str(name or ""),
+                    organization=str(org or ""),
+                    old_status=str(old_status or ""),
+                    new_status=str(new_status or ""),
+                    source="queryset_update",
+                )
+
+        try:
+            transaction.on_commit(_notify)
+        except Exception:
+            _notify()
+
+        return updated
 
 
 class AccountVideoAnalytics(models.Model):
@@ -37,8 +153,56 @@ class AccountVideoAnalytics(models.Model):
     parser_heartbeat_at = models.DateTimeField(null=True, blank=True)
     parser_last_error = models.TextField(null=True, blank=True)
 
+    objects = AccountVideoAnalyticsQuerySet.as_manager()
+
     def __str__(self):
         return f"{self.name} - {self.organization}"
+
+    def save(self, *args, **kwargs):
+        """Переопределение save(): оповещаем админов в Telegram при смене parser_status.
+
+        Важно:
+        - Срабатывает только для изменений, проходящих через `.save()`.
+          Обновления через `QuerySet.update(...)` Django сигналов/`save()` не вызывают.
+        - Отправка делается best-effort и не должна ломать сохранение.
+        """
+
+        old_status = None
+        if self.pk:
+            try:
+                old_status = (
+                    AccountVideoAnalytics.objects.filter(pk=self.pk)
+                    .values_list("parser_status", flat=True)
+                    .first()
+                )
+            except Exception:
+                old_status = None
+
+        super().save(*args, **kwargs)
+
+        new_status = getattr(self, "parser_status", None)
+        if old_status is None or old_status == new_status:
+            return
+
+        def _notify() -> None:
+            _notify_va_parser_status_change(
+                account_id=int(self.pk or 0),
+                name=str(getattr(self, "name", "") or ""),
+                organization=str(getattr(self, "organization", "") or ""),
+                old_status=str(old_status or ""),
+                new_status=str(new_status or ""),
+                source="model_save",
+            )
+
+        # Отправляем после коммита транзакции (если мы внутри atomic).
+        try:
+            transaction.on_commit(_notify)
+        except Exception:
+            # best-effort fallback
+            try:
+                _notify()
+            except Exception:
+                logger.exception("Failed to run parser_status change notification")
 
     @property
     def is_parser_running(self) -> bool:

@@ -53,14 +53,27 @@ def _get_token() -> Optional[str]:
     return getattr(settings, "TLG_BOT_TOKEN", None)
 
 
-def send_message(*, chat_id: int, text: str, meta: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def send_message(
+    *,
+    chat_id: int,
+    text: str,
+    parse_mode: Optional[str] = None,
+    disable_web_page_preview: Optional[bool] = None,
+    meta: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     token = _get_token()
     if not token:
         return {"ok": False, "status_code": None, "error": "TLG_BOT_TOKEN is not set"}
     try:
+        payload: Dict[str, Any] = {"chat_id": chat_id, "text": text}
+        if parse_mode:
+            payload["parse_mode"] = parse_mode
+        if disable_web_page_preview is not None:
+            payload["disable_web_page_preview"] = bool(disable_web_page_preview)
+
         resp = requests.post(
             f"https://api.telegram.org/bot{token}/sendMessage",
-            json={"chat_id": chat_id, "text": text},
+            json=payload,
             timeout=15,
         )
         ok = bool(getattr(resp, "ok", False))
@@ -71,12 +84,29 @@ def send_message(*, chat_id: int, text: str, meta: Optional[Dict[str, Any]] = No
             status_code=getattr(resp, "status_code", None),
             error="" if ok else (resp.text or ""),
             text=text,
-            meta=meta,
+            meta={
+                **(meta or {}),
+                **({"parse_mode": parse_mode} if parse_mode else {}),
+                **({"disable_web_page_preview": disable_web_page_preview} if disable_web_page_preview is not None else {}),
+            }
+            or None,
         )
         return {"ok": ok, "status_code": getattr(resp, "status_code", None), "error": "" if ok else (resp.text or "")}
     except Exception:
         logger.exception("Ошибка отправки Telegram message (chat_id=%s)", chat_id)
-        _safe_log_event(chat_id=chat_id, kind="message", ok=False, error="exception", text=text, meta=meta)
+        _safe_log_event(
+            chat_id=chat_id,
+            kind="message",
+            ok=False,
+            error="exception",
+            text=text,
+            meta={
+                **(meta or {}),
+                **({"parse_mode": parse_mode} if parse_mode else {}),
+                **({"disable_web_page_preview": disable_web_page_preview} if disable_web_page_preview is not None else {}),
+            }
+            or None,
+        )
         return {"ok": False, "status_code": None, "error": "exception"}
 
 

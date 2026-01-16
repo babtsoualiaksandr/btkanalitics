@@ -10,6 +10,7 @@ urlpatterns = [
 
     # Events dashboard (non-admin)
     path('events/', views_events.events_list, name='events_list'),
+    path('events/table-body/', views_events.events_table_body, name='events_table_body'),
     path('events/export.xlsx', views_events.events_export_xlsx, name='events_export_xlsx'),
     path('events/alarm/<int:alarm_pk>/export.xlsx', views_events.event_export_xlsx, name='event_export_xlsx'),
     path('events/alarm/<int:alarm_pk>/export.pdf', views_events.event_export_pdf, name='event_export_pdf'),

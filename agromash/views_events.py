@@ -487,12 +487,14 @@ def events_list(request: HttpRequest):
     user = request.user
     allowed_monitors = _allowed_monitors_qs(user)
 
-    # По умолчанию: сегодня с 00:00 до текущего времени
+    # По умолчанию: сегодня с 00:00 до конца дня.
+    # В UI это обычно ожидается как "текущая дата" и условные "24:00".
     now = timezone.localtime(timezone.now())
     start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    end_of_day = now.replace(hour=23, minute=59, second=0, microsecond=0)
     initial = {
         'date_from': start_of_day.strftime('%Y-%m-%dT%H:%M'),
-        'date_to': now.strftime('%Y-%m-%dT%H:%M'),
+        'date_to': end_of_day.strftime('%Y-%m-%dT%H:%M'),
         'limit': '20',
     }
 
@@ -570,6 +572,46 @@ def events_list(request: HttpRequest):
             'export_defaults': export_defaults,
         },
     )
+
+
+@csrf_exempt
+@login_required
+@require_GET
+def events_table_body(request: HttpRequest):
+    """HTML-фрагмент строк таблицы событий (tbody).
+
+    Используется фронтендом для автообновления таблицы без перезагрузки страницы.
+    """
+
+    _assert_events_access(request.user)
+    user = request.user
+    allowed_monitors = _allowed_monitors_qs(user)
+
+    # По умолчанию: сегодня с 00:00 до конца дня (как в events_list)
+    now = timezone.localtime(timezone.now())
+    start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    end_of_day = now.replace(hour=23, minute=59, second=0, microsecond=0)
+    initial = {
+        'date_from': start_of_day.strftime('%Y-%m-%dT%H:%M'),
+        'date_to': end_of_day.strftime('%Y-%m-%dT%H:%M'),
+        'limit': '20',
+    }
+
+    sort = str(request.GET.get('sort') or 'time')
+    direction = str(request.GET.get('dir') or 'desc').lower()
+    allowed_sorts = {'time', 'monitor', 'topic', 'plate'}
+    if sort not in allowed_sorts:
+        sort = 'time'
+    if direction not in ('asc', 'desc'):
+        direction = 'desc'
+
+    form = AlarmFilterForm(request.GET or None, allowed_monitors_qs=allowed_monitors, initial=initial)
+    if form.is_valid():
+        alarms = _filter_alarms(user=user, cleaned=form.cleaned_data, sort=sort, direction=direction)
+    else:
+        alarms = []
+
+    return render(request, 'agromash/_events_table_body.html', {'alarms': alarms})
 
 
 def _render_case_partial(request: HttpRequest, *, alarm: Alarm, case: AlarmCase) -> HttpResponse:
