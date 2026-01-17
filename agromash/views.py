@@ -111,6 +111,26 @@ def _journal_tail(*, unit: str, lines: int = 100) -> dict:
     return {"unit": unit, "cmd": " ".join(cmd), "rc": rc, "out": out, "err": err}
 
 
+def _filter_log_lines(text: str, *, must_contain: list[str]) -> str:
+    """Фильтрация логов по ключевым словам (все слова должны встретиться).
+
+    - Регистр не важен.
+    - Пустые токены игнорируются.
+    """
+
+    raw_lines = (text or "").splitlines()
+    tokens = [t.strip().lower() for t in (must_contain or []) if str(t or "").strip()]
+    if not tokens:
+        return "\n".join(raw_lines)
+
+    out_lines: list[str] = []
+    for line in raw_lines:
+        ll = line.lower()
+        if all(tok in ll for tok in tokens):
+            out_lines.append(line)
+    return "\n".join(out_lines)
+
+
 def _collect_system_status_context() -> dict:
     """Собрать данные для dashboard (переиспользуется обычной страницей и админкой)."""
 
@@ -165,6 +185,28 @@ def _collect_system_status_context() -> dict:
     ]
     service_logs = [_journal_tail(unit=u, lines=100) for u in service_units]
 
+    # --- VA parser lifecycle logs (для диагностики рассинхрона статуса/кнопки) ---
+    # Ищем именно те строки, которые пишет [`agromash/services/parse_event_runner.py`](agromash/services/parse_event_runner.py:1)
+    # с префиксом "va_parser".
+    #
+    # Фильтрацию по ключевым словам делаем на сервере (GET-параметр va_log_q)
+    # и дополнительно на клиенте (JS) в шаблоне.
+    worker_unit = "btkanalitics-celery-worker.service"
+    worker_tail = _journal_tail(unit=worker_unit, lines=500)
+    raw_worker_out = str(worker_tail.get("out") or "")
+    va_lines = "\n".join([ln for ln in raw_worker_out.splitlines() if "va_parser" in ln])
+    # query будет добавлен в ctx ниже из request (см. system_status/admin_system_status)
+    va_parser_logs = {
+        "unit": worker_unit,
+        "cmd": worker_tail.get("cmd"),
+        "rc": worker_tail.get("rc"),
+        "err": worker_tail.get("err"),
+        "raw_count": len(raw_worker_out.splitlines()),
+        "va_count": len(va_lines.splitlines()) if va_lines else 0,
+        "text": va_lines,
+        "q": "",
+    }
+
     # Запущенные парсеры (best-effort)
     hb_threshold = timezone.now() - timezone.timedelta(minutes=2)
     running_parsers_qs = AccountVideoAnalytics.objects.filter(
@@ -184,6 +226,7 @@ def _collect_system_status_context() -> dict:
         "monitors": monitors_view,
         "unit_states": unit_states,
         "service_logs": service_logs,
+        "va_parser_logs": va_parser_logs,
         "running_parsers": running_parsers,
         "telegram_logs": telegram_logs,
         "report_logs": report_logs,
@@ -194,7 +237,15 @@ def _collect_system_status_context() -> dict:
 def system_status(request):
     """Страница статуса: мониторы + состояние systemd unit'ов + последние логи."""
 
-    return render(request, "agromash/system_status.html", _collect_system_status_context())
+    ctx = _collect_system_status_context()
+    q = str(request.GET.get("va_log_q") or "").strip()
+    ctx["va_parser_logs"]["q"] = q
+    if q:
+        ctx["va_parser_logs"]["text"] = _filter_log_lines(
+            ctx["va_parser_logs"]["text"],
+            must_contain=["va_parser", *q.split()],
+        )
+    return render(request, "agromash/system_status.html", ctx)
 
 
 @staff_member_required
@@ -203,6 +254,13 @@ def admin_system_status(request):
 
     ctx = django_admin.site.each_context(request)
     ctx.update(_collect_system_status_context())
+    q = str(request.GET.get("va_log_q") or "").strip()
+    ctx["va_parser_logs"]["q"] = q
+    if q:
+        ctx["va_parser_logs"]["text"] = _filter_log_lines(
+            ctx["va_parser_logs"]["text"],
+            must_contain=["va_parser", *q.split()],
+        )
     return TemplateResponse(request, "admin/system_status.html", ctx)
 
 

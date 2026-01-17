@@ -40,12 +40,19 @@ def _mark_started(account_id: int, *, task_id: Optional[str]) -> None:
         parser_heartbeat_at=now,
         parser_last_error=None,
     )
+    logger.info(
+        "va_parser mark_started account_id=%s task_id=%s at=%s",
+        account_id,
+        task_id,
+        now.isoformat(),
+    )
 
 
 def _mark_stopping(account_id: int) -> None:
     AccountVideoAnalytics.objects.filter(pk=account_id).update(
         parser_status=AccountVideoAnalytics.PARSER_STATUS_STOPPING,
     )
+    logger.info("va_parser mark_stopping account_id=%s", account_id)
 
 
 def _mark_stopped(account_id: int) -> None:
@@ -57,6 +64,7 @@ def _mark_stopped(account_id: int) -> None:
         parser_stopped_at=now,
         parser_heartbeat_at=now,
     )
+    logger.info("va_parser mark_stopped account_id=%s at=%s", account_id, now.isoformat())
 
 
 def _mark_error(account_id: int, *, error_text: str) -> None:
@@ -66,6 +74,14 @@ def _mark_error(account_id: int, *, error_text: str) -> None:
         parser_last_error=error_text[:5000],
         parser_stopped_at=now,
         parser_heartbeat_at=now,
+    )
+
+    # Stacktrace логируется в месте, где исключение поймано. Здесь — только причина.
+    logger.error(
+        "va_parser mark_error account_id=%s at=%s error=%s",
+        account_id,
+        now.isoformat(),
+        (error_text or "")[:500],
     )
 
 
@@ -98,8 +114,24 @@ def run_parse_event(
     ctx = ctx or ParserRunContext(account_id=account_id, base_url=settings.BASE_URL)
     write = stdout_write or (lambda s: logger.info(s))
 
+    logger.info(
+        "va_parser run_parse_event enter account_id=%s task_id=%s base_url=%s",
+        account_id,
+        task_id,
+        ctx.base_url,
+    )
+
     with transaction.atomic():
         acc = AccountVideoAnalytics.objects.select_for_update().get(pk=account_id)
+
+        logger.info(
+            "va_parser state_before_start account_id=%s status=%s task_id_db=%s stop_req=%s hb=%s",
+            account_id,
+            acc.parser_status,
+            acc.parser_task_id,
+            acc.parser_stop_requested,
+            getattr(acc, "parser_heartbeat_at", None),
+        )
 
         # Не допускаем параллельный запуск нескольких воркеров на один аккаунт.
         # Но важно: когда запуск инициирован из админки, статус уже может быть "starting".
@@ -125,6 +157,12 @@ def run_parse_event(
             parser_task_id=task_id or acc.parser_task_id,
             parser_stop_requested=False,
             parser_last_error=None,
+        )
+
+        logger.info(
+            "va_parser mark_starting account_id=%s task_id=%s",
+            account_id,
+            (task_id or acc.parser_task_id),
         )
 
     _mark_started(account_id, task_id=task_id)
@@ -162,6 +200,15 @@ def run_parse_event(
             except VAAuthError as e:
                 auth_failures += 1
                 write(f"Login failed ({auth_failures}/{ctx.max_auth_failures}): {e}")
+
+                logger.warning(
+                    "va_parser auth_failed account_id=%s task_id=%s failures=%s max=%s err=%s",
+                    account_id,
+                    task_id,
+                    auth_failures,
+                    ctx.max_auth_failures,
+                    str(e),
+                )
 
                 if auth_failures >= int(ctx.max_auth_failures):
                     _mark_error(account_id, error_text=f"Auth failed {auth_failures} times: {e}")
@@ -202,7 +249,13 @@ def listen_sse(
 
     response = None
     try:
+        logger.info("va_parser sse_connect account_id=%s path=%s", account_id, sse_path)
         response = client.request("GET", sse_path, headers=headers, stream=True)
+        logger.info(
+            "va_parser sse_connected account_id=%s status_code=%s",
+            account_id,
+            getattr(response, "status_code", None),
+        )
         response.raise_for_status()
 
         event_type = None
@@ -212,6 +265,7 @@ def listen_sse(
             now_m = time.monotonic()
             heartbeat(now_m)
             if should_stop(now_m):
+                logger.info("va_parser sse_stop_requested account_id=%s", account_id)
                 return
 
             if line == "":
@@ -237,6 +291,14 @@ def listen_sse(
 
     except Exception as e:
         write(f"Error in SSE: {e}")
+
+        # Отдельно логируем, чтобы в journalctl было видно причину обрыва SSE.
+        logger.warning(
+            "va_parser sse_error account_id=%s err=%s",
+            account_id,
+            str(e),
+            exc_info=True,
+        )
         return
     finally:
         if response is not None:
@@ -244,6 +306,8 @@ def listen_sse(
                 response.close()
             except Exception:
                 pass
+
+        logger.info("va_parser sse_disconnected account_id=%s", account_id)
 
 
 def _process_sse_event(
@@ -259,11 +323,17 @@ def _process_sse_event(
             parsed_data = json.loads(data)
         except json.JSONDecodeError:
             write(f"Invalid JSON in KEEP_ALIVE: {data}")
+            logger.warning(
+                "va_parser keep_alive_invalid_json account_id=%s data=%s",
+                account_id,
+                (data or "")[:300],
+            )
             return
 
         ttl = parsed_data.get("ttl_seconds", 0)
         if ttl < 30:
             write(f"TTL {ttl} < 30, restarting stream")
+            logger.warning("va_parser keep_alive_low_ttl account_id=%s ttl=%s", account_id, ttl)
             return
         # heartbeat делается выше
         return

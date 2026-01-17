@@ -1,9 +1,12 @@
 import logging
+import os
 import random
+import tempfile
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
+import certifi
 import requests
 from django.db import transaction
 
@@ -55,6 +58,12 @@ class VAApiClient:
         account_id: int,
         base_url: str,
         session: Optional[requests.Session] = None,
+        # SSL verify behaviour:
+        #   - None  -> auto (use system CA bundle if available, else requests default)
+        #   - True  -> requests default verification
+        #   - False -> disable verification (НЕ рекомендовано)
+        #   - str   -> path to CA bundle
+        verify: Optional[object] = None,
         max_attempts: int = 4,
         base_backoff_sec: float = 0.4,
         timeout: Tuple[float, float] = (7.0, 30.0),
@@ -62,9 +71,111 @@ class VAApiClient:
         self._account_id = account_id
         self._base_url = base_url.rstrip('/')
         self._session = session or requests.Session()
+        self._verify = verify
         self._max_attempts = max(1, max_attempts)
         self._base_backoff_sec = max(0.0, base_backoff_sec)
         self._timeout = timeout
+
+        # Cache for combined CA bundle path (per process).
+        self._combined_ca_bundle_path: Optional[str] = None
+
+    def _build_combined_ca_bundle(self) -> str:
+        """Создаёт (один раз на процесс) объединённый CA bundle: system + certifi.
+
+        Зачем:
+        - в некоторых окружениях `certifi` в venv может быть неполным/устаревшим
+        - в некоторых окружениях системный bundle может быть не синхронизирован с Python
+        - объединение повышает шанс найти issuer/intermediate при неполной цепочке.
+        """
+
+        if self._combined_ca_bundle_path and os.path.exists(self._combined_ca_bundle_path):
+            return self._combined_ca_bundle_path
+
+        system_bundle = "/etc/ssl/certs/ca-certificates.crt"
+        certifi_bundle = certifi.where()
+        # Сервер периодически (или всегда) не отдаёт intermediate в цепочке.
+        # Добавляем нужный intermediate в наш bundle, чтобы валидация проходила.
+        bundled_intermediate = os.path.join(
+            os.path.dirname(__file__),
+            "certs",
+            "globalsign_gcc_r6_alphassl_ca_2025.pem",
+        )
+
+        parts: List[str] = []
+        for p in (system_bundle, certifi_bundle, bundled_intermediate):
+            try:
+                if p and os.path.exists(p):
+                    with open(p, "r", encoding="utf-8", errors="ignore") as f:
+                        parts.append(f.read())
+            except Exception:
+                # Не валим процесс, если не смогли прочитать один из bundle.
+                continue
+
+        if not parts:
+            # Fallback: пусть requests сам выберет.
+            self._combined_ca_bundle_path = ""
+            return ""
+
+        # Пишем в /tmp, чтобы не требовать прав на запись в проект/venv.
+        fd, out_path = tempfile.mkstemp(prefix="va_ca_bundle_", suffix=".pem")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as out:
+                out.write("\n\n".join(parts))
+        except Exception:
+            try:
+                os.close(fd)
+            except Exception:
+                pass
+            raise
+
+        self._combined_ca_bundle_path = out_path
+        return out_path
+
+    def _resolve_verify(self, *, verify: Optional[object] = None) -> object:
+        """Подбирает CA bundle для requests.
+
+        Наблюдаемая проблема: периодически падаем с
+        SSLCertVerificationError: unable to get local issuer certificate.
+
+        По запросу делаем поведение предсказуемым: по умолчанию используем
+        bundle из `certifi` (внутри venv), а не системный.
+        """
+
+        effective = verify if verify is not None else self._verify
+        if effective is not None:
+            return effective
+
+        # Default: combined bundle (system + certifi) for maximum compatibility.
+        combined = self._build_combined_ca_bundle()
+        if combined:
+            return combined
+
+        # Last resort: certifi bundle
+        return certifi.where()
+
+    def _verify_candidates(self) -> List[object]:
+        """Список кандидатов verify для ретраев при SSL ошибках."""
+
+        candidates: List[object] = []
+        candidates.append(self._resolve_verify())
+
+        system_bundle = "/etc/ssl/certs/ca-certificates.crt"
+        if os.path.exists(system_bundle):
+            candidates.append(system_bundle)
+
+        candidates.append(certifi.where())
+        candidates.append(True)
+
+        # Удаляем дубликаты, сохраняя порядок.
+        uniq: List[object] = []
+        for c in candidates:
+            if c not in uniq:
+                uniq.append(c)
+        return uniq
+
+    def _session_request(self, *, verify: Optional[object] = None, **kwargs: Any) -> requests.Response:
+        # requests expects verify: bool | str
+        return self._session.request(verify=self._resolve_verify(verify=verify), **kwargs)
 
     # -----------------
     # Public API
@@ -117,16 +228,25 @@ class VAApiClient:
         last_exc: Optional[BaseException] = None
 
         for attempt in range(1, self._max_attempts + 1):
+            verify_override: Optional[object] = None
             try:
                 account = self._get_account()
                 req_headers = self._auth_headers(account.access_token, headers=headers)
 
-                resp = self._session.request(
+                # Если verify не задан явно — при SSL-ошибках попробуем разные bundle.
+                verify_override = kwargs.get("verify", None)
+                if "verify" not in kwargs:
+                    verify_candidates = self._verify_candidates()
+                    idx = min(attempt - 1, len(verify_candidates) - 1)
+                    verify_override = verify_candidates[idx]
+
+                resp = self._session_request(
                     method=method,
                     url=url,
                     headers=req_headers,
                     timeout=timeout,
                     stream=stream,
+                    verify=verify_override,
                     **kwargs,
                 )
 
@@ -143,7 +263,7 @@ class VAApiClient:
                         )
                         account = self._get_account()
                         req_headers = self._auth_headers(account.access_token, headers=headers)
-                        resp = self._session.request(
+                        resp = self._session_request(
                             method=method,
                             url=url,
                             headers=req_headers,
@@ -167,7 +287,7 @@ class VAApiClient:
                     self._login_and_persist()
                     account = self._get_account()
                     req_headers = self._auth_headers(account.access_token, headers=headers)
-                    resp = self._session.request(
+                    resp = self._session_request(
                         method=method,
                         url=url,
                         headers=req_headers,
@@ -207,8 +327,16 @@ class VAApiClient:
 
                 return resp
 
-            except (requests.Timeout, requests.ConnectionError) as exc:
+            except (requests.Timeout, requests.ConnectionError, requests.exceptions.SSLError) as exc:
                 last_exc = exc
+                if isinstance(exc, requests.exceptions.SSLError):
+                    logger.warning(
+                        "VA API: SSL ошибка при verify=%r (account_id=%s, attempt=%s/%s)",
+                        verify_override,
+                        self._account_id,
+                        attempt,
+                        self._max_attempts,
+                    )
                 logger.warning(
                     "VA API: сетевая ошибка %s, retry (account_id=%s, attempt=%s/%s)",
                     exc.__class__.__name__,
@@ -268,7 +396,7 @@ class VAApiClient:
         payload = {"refresh_token": account.refresh_token}
 
         try:
-            resp = self._session.post(url, json=payload, timeout=self._timeout)
+            resp = self._session_request(method="POST", url=url, json=payload, timeout=self._timeout)
         except (requests.Timeout, requests.ConnectionError) as exc:
             logger.warning(
                 "VA API: refresh — сетевая ошибка %s (account_id=%s)",
@@ -346,7 +474,7 @@ class VAApiClient:
                 "rememberme": True,
             }
 
-            resp = self._session.post(url, json=payload, timeout=self._timeout)
+            resp = self._session_request(method="POST", url=url, json=payload, timeout=self._timeout)
             if resp.status_code != 200:
                 retry_after = None
                 if resp.status_code == 429:
