@@ -5,6 +5,7 @@ from typing import Optional
 
 from celery import shared_task
 from celery.exceptions import SoftTimeLimitExceeded
+from celery.exceptions import TimeLimitExceeded
 from celery.result import AsyncResult
 from django.conf import settings
 from django.db.models import Q
@@ -416,10 +417,22 @@ def send_report_range_now(
         run_log.save(update_fields=["finished_at", "duration_ms", "ok", "error"])
 
 
-@shared_task(bind=True, name="agromash.parse_event")
+@shared_task(bind=True, name="agromash.parse_event", time_limit=None, soft_time_limit=None)
 def parse_event_task(self, account_id: int) -> None:
     """Celery-задача: запускает «вечный» парсер событий по аккаунту."""
     try:
+        # Диагностический лог: какие лимиты видит воркер.
+        # Это поможет подтвердить, что задачу убивает именно глобальный hard time limit.
+        req = getattr(self, "request", None)
+        logger.info(
+            "parse_event_task start account_id=%s task_id=%s time_limit_req=%s soft_time_limit_req=%s settings_time_limit=%s settings_soft_time_limit=%s",
+            account_id,
+            getattr(req, "id", None),
+            getattr(req, "time_limit", None),
+            getattr(req, "soft_time_limit", None),
+            getattr(settings, "CELERY_TASK_TIME_LIMIT", None),
+            getattr(settings, "CELERY_TASK_SOFT_TIME_LIMIT", None),
+        )
         run_parse_event(
             account_id=account_id,
             task_id=getattr(self.request, "id", None),
@@ -430,6 +443,20 @@ def parse_event_task(self, account_id: int) -> None:
             parser_status=AccountVideoAnalytics.PARSER_STATUS_ERROR,
             parser_last_error="Soft time limit exceeded",
             parser_stopped_at=timezone.now(),
+        )
+        raise
+    except TimeLimitExceeded:
+        # Hard limit: воркер убивает задачу (обычно SIGKILL), поэтому важно успеть записать причину.
+        # Это подтверждает, что лимит времени мешает «вечной» задаче.
+        AccountVideoAnalytics.objects.filter(pk=account_id).update(
+            parser_status=AccountVideoAnalytics.PARSER_STATUS_ERROR,
+            parser_last_error="Hard time limit exceeded (TimeLimitExceeded)",
+            parser_stopped_at=timezone.now(),
+        )
+        logger.exception(
+            "parse_event_task hard time limit exceeded account_id=%s task_id=%s",
+            account_id,
+            getattr(getattr(self, "request", None), "id", None),
         )
         raise
 

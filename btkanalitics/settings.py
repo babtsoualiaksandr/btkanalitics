@@ -180,6 +180,17 @@ CELERY_TASK_SOFT_TIME_LIMIT = config('CELERY_TASK_SOFT_TIME_LIMIT', default=60 *
 CELERY_WORKER_PREFETCH_MULTIPLIER = config('CELERY_WORKER_PREFETCH_MULTIPLIER', default=1, cast=int)
 CELERY_TASK_ACKS_LATE = True
 
+# Для «вечных» задач Celery (long-running loops) глобальный time limit не подходит.
+# Отключаем ограничения времени только для парсера SSE.
+#
+# Важно: остальные задачи продолжают использовать глобальные лимиты выше.
+CELERY_TASK_ANNOTATIONS = {
+    "agromash.parse_event": {
+        "time_limit": None,
+        "soft_time_limit": None,
+    },
+}
+
 # Периодические задачи (Celery Beat)
 CELERY_BEAT_SCHEDULE = {
     "send_due_telegram_reports_every_minute": {
