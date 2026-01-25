@@ -160,6 +160,7 @@ def send_photo(
     filename: str,
     content: bytes,
     caption: str,
+    parse_mode: Optional[str] = None,
     mime_type: str = "image/jpeg",
     alarm=None,
     meta: Optional[Dict[str, Any]] = None,
@@ -171,7 +172,9 @@ def send_photo(
         return {"ok": False, "status_code": None, "error": "TLG_BOT_TOKEN is not set"}
 
     url = f"https://api.telegram.org/bot{token}/sendPhoto"
-    data = {"chat_id": chat_id, "caption": caption}
+    data: Dict[str, Any] = {"chat_id": chat_id, "caption": caption}
+    if parse_mode:
+        data["parse_mode"] = parse_mode
     files = {"photo": (filename, content, mime_type)}
 
     try:
@@ -186,10 +189,27 @@ def send_photo(
             text=caption,
             filename=filename,
             alarm=alarm,
-            meta=meta,
+            meta={
+                **(meta or {}),
+                **({"parse_mode": parse_mode} if parse_mode else {}),
+            }
+            or None,
         )
         return {"ok": ok, "status_code": getattr(resp, "status_code", None), "error": "" if ok else (resp.text or "")}
     except Exception:
         logger.exception("Ошибка отправки Telegram photo (chat_id=%s, filename=%s)", chat_id, filename)
-        _safe_log_event(chat_id=chat_id, kind="photo", ok=False, error="exception", text=caption, filename=filename, alarm=alarm, meta=meta)
+        _safe_log_event(
+            chat_id=chat_id,
+            kind="photo",
+            ok=False,
+            error="exception",
+            text=caption,
+            filename=filename,
+            alarm=alarm,
+            meta={
+                **(meta or {}),
+                **({"parse_mode": parse_mode} if parse_mode else {}),
+            }
+            or None,
+        )
         return {"ok": False, "status_code": None, "error": "exception"}

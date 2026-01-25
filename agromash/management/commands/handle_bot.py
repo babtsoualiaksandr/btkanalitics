@@ -1,3 +1,4 @@
+import html
 import requests
 import time
 import os
@@ -65,21 +66,47 @@ class Command(BaseCommand):
         def _parsers_text() -> str:
             accounts = list(AccountVideoAnalytics.objects.all().order_by("id"))
             lines = [
-                "Parser Status (VA accounts)",
-                "Легенда: 💓 online | 💔 нет heartbeat | ⏹ stopped | ⏳ переход | ⚠️ error",
+                "<b>Parser Status (VA accounts)</b>",
+                "<i>Легенда:</i> 💓 online | 💔 нет heartbeat | ⏹ stopped | ⏳ переход | ⚠️ error",
                 "",
             ]
             for a in accounts:
                 hb = _fmt_age(getattr(a, "parser_heartbeat_at", None))
                 task = (getattr(a, "parser_task_id", None) or "-")
                 status = getattr(a, "parser_status", "-")
+                h = html.escape
                 lines.append(
-                    f"{_heart_icon(a)} #{a.id} {a.name} | {a.organization} | {status} | hb={hb} | task={task}"
+                    (
+                        f"{_heart_icon(a)} <code>#{h(str(a.id))}</code> "
+                        f"{h(str(a.name or ''))} | {h(str(a.organization or ''))} | "
+                        f"<b>{h(str(status))}</b> | hb=<code>{h(str(hb))}</code> | task=<code>{h(str(task))}</code>"
+                    )
                 )
             if len(accounts) == 0:
-                lines.append("Нет AccountVideoAnalytics")
-            lines.append("\nКоманды: /parser <id> start|stop")
+                lines.append("<i>Нет AccountVideoAnalytics</i>")
+            lines.append("\nКоманды: <code>/parser &lt;id&gt; start|stop</code>")
             return "\n".join(lines)
+
+        def _parsers_keyboard() -> dict:
+            # Telegram inline keyboard не поддерживает цвета кнопок.
+            # В качестве визуального различия используем emoji:
+            #   🔴 stop / 🟢 start / 🟠 restart
+            rows = [[{"text": "🔄 Refresh", "callback_data": "va:refresh"}]]
+            for a in AccountVideoAnalytics.objects.all().order_by("id"):
+                if a.is_parser_running:
+                    rows.append([
+                        {"text": f"🔴 Stop #{a.id}", "callback_data": f"va:stop:{a.id}"},
+                    ])
+                else:
+                    label = (
+                        f"🟠 Restart #{a.id}"
+                        if a.parser_status == AccountVideoAnalytics.PARSER_STATUS_RUNNING
+                        else f"🟢 Start #{a.id}"
+                    )
+                    rows.append([
+                        {"text": label, "callback_data": f"va:start:{a.id}"},
+                    ])
+            return {"inline_keyboard": rows}
 
         def _tg_post(method: str, payload: dict) -> None:
             try:
@@ -166,8 +193,12 @@ class Command(BaseCommand):
                                 sub.save(update_fields=["username"])
                             logger.info("/start subscriber=%s created=%s", chat_id, created)
 
-                            text = "Вы подписаны. Откройте Mini App для управления отчётами."
-                            payload = {'chat_id': chat_id, 'text': text}
+                            text = (
+                                "<b>Вы подписаны</b>\n"
+                                f"<code>chat_id={html.escape(str(chat_id))}</code>\n"
+                                "Для управления отчётами используйте Mini App."
+                            )
+                            payload = {'chat_id': chat_id, 'text': text, 'parse_mode': 'HTML', 'disable_web_page_preview': True}
                             if webapp_url:
                                 payload['reply_markup'] = {
                                     'inline_keyboard': [[{
@@ -189,14 +220,20 @@ class Command(BaseCommand):
                                 if not _is_admin(chat_id):
                                     requests.post(
                                         f'https://api.telegram.org/bot{token}/sendMessage',
-                                        json={'chat_id': chat_id, 'text': 'Доступ запрещён'},
+                                        json={'chat_id': chat_id, 'text': '⛔ <b>Доступ запрещён</b>', 'parse_mode': 'HTML'},
                                         timeout=15,
                                     )
                                     continue
 
                                 requests.post(
                                     f'https://api.telegram.org/bot{token}/sendMessage',
-                                    json={'chat_id': chat_id, 'text': _parsers_text()},
+                                    json={
+                                        'chat_id': chat_id,
+                                        'text': _parsers_text(),
+                                        'parse_mode': 'HTML',
+                                        'disable_web_page_preview': True,
+                                        'reply_markup': _parsers_keyboard(),
+                                    },
                                     timeout=15,
                                 )
                                 continue
@@ -205,7 +242,7 @@ class Command(BaseCommand):
                                 if not _is_admin(chat_id):
                                     requests.post(
                                         f'https://api.telegram.org/bot{token}/sendMessage',
-                                        json={'chat_id': chat_id, 'text': 'Доступ запрещён'},
+                                        json={'chat_id': chat_id, 'text': '⛔ <b>Доступ запрещён</b>', 'parse_mode': 'HTML'},
                                         timeout=15,
                                     )
                                     continue
@@ -214,7 +251,7 @@ class Command(BaseCommand):
                                 if len(parts) < 3:
                                     requests.post(
                                         f'https://api.telegram.org/bot{token}/sendMessage',
-                                        json={'chat_id': chat_id, 'text': 'Использование: /parser <id> start|stop'},
+                                        json={'chat_id': chat_id, 'text': 'Использование: <code>/parser &lt;id&gt; start|stop</code>', 'parse_mode': 'HTML'},
                                         timeout=15,
                                     )
                                     continue
@@ -224,7 +261,7 @@ class Command(BaseCommand):
                                 except Exception:
                                     requests.post(
                                         f'https://api.telegram.org/bot{token}/sendMessage',
-                                        json={'chat_id': chat_id, 'text': 'id должен быть числом'},
+                                        json={'chat_id': chat_id, 'text': 'id должен быть числом', 'parse_mode': 'HTML'},
                                         timeout=15,
                                     )
                                     continue
@@ -256,7 +293,7 @@ class Command(BaseCommand):
 
                                 requests.post(
                                     f'https://api.telegram.org/bot{token}/sendMessage',
-                                    json={'chat_id': chat_id, 'text': msg},
+                                    json={'chat_id': chat_id, 'text': f"ℹ️ {html.escape(str(msg or ''))}", 'parse_mode': 'HTML'},
                                     timeout=15,
                                 )
                 time.sleep(1)

@@ -20,6 +20,9 @@ from agromash.services.report_scheduler import compute_next_run_at
 from agromash.services.reporting import generate_report_attachments, generate_report_attachments_for_range
 from agromash.services.telegram_client import send_document, send_message
 
+# Импортируем задачи мониторинга, чтобы Celery их зарегистрировал
+from agromash import tasks_monitoring  # noqa: F401
+
 
 logger = logging.getLogger(__name__)
 

@@ -211,12 +211,31 @@ class AccountVideoAnalytics(models.Model):
         Celery воркер не всегда предоставляет result backend, поэтому ориентируемся на:
           - parser_status == running
           - heartbeat не старше 2 минут (если heartbeat есть)
+        
+        Важно: если heartbeat устарел, но статус всё ещё running — это признак
+        рассинхронизации (задача убита, но статус не обновлён). Периодическая задача
+        `agromash.check_parser_heartbeats` должна корректировать такие случаи.
         """
         if self.parser_status != self.PARSER_STATUS_RUNNING:
             return False
         if not self.parser_heartbeat_at:
+            # Нет heartbeat — считаем, что парсер только стартовал
             return True
-        return self.parser_heartbeat_at >= (timezone.now() - timezone.timedelta(minutes=2))
+        
+        threshold = timezone.now() - timezone.timedelta(minutes=2)
+        is_fresh = self.parser_heartbeat_at >= threshold
+        
+        if not is_fresh:
+            # Heartbeat устарел — логируем для диагностики
+            age_sec = (timezone.now() - self.parser_heartbeat_at).total_seconds()
+            logger.warning(
+                "is_parser_running: stale heartbeat detected (account_id=%s, age=%.1fs, status=%s)",
+                self.pk,
+                age_sec,
+                self.parser_status,
+            )
+        
+        return is_fresh
 
 
 class Alarm(models.Model):

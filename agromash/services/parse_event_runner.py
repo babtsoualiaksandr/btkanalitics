@@ -1,5 +1,7 @@
 import json
 import logging
+import random
+import signal
 import time
 from dataclasses import dataclass
 from typing import Callable, Optional
@@ -27,6 +29,17 @@ class ParserRunContext:
     # Ограничение числа подряд неуспешных попыток аутентификации.
     # Нужно, чтобы при неверных кредах/429 не крутить бесконечный цикл login.
     max_auth_failures: int = 3
+
+    # --- SSE tuning ---
+    # requests timeout is (connect_timeout, read_timeout)
+    # Для SSE read_timeout должен быть большим, иначе при отсутствии данных > N секунд
+    # requests/urllib3 выбрасывают ReadTimeoutError.
+    sse_connect_timeout_sec: float = 7.0
+    sse_read_timeout_sec: float = 60.0 * 60.0  # 1 hour
+
+    # Backoff между переподключениями (если SSE рвётся по таймауту/сети)
+    sse_reconnect_backoff_base_sec: float = 1.0
+    sse_reconnect_backoff_max_sec: float = 30.0
 
 
 def _mark_started(account_id: int, *, task_id: Optional[str]) -> None:
@@ -167,10 +180,32 @@ def run_parse_event(
 
     _mark_started(account_id, task_id=task_id)
 
+    # Регистрируем обработчик SIGTERM (billiard отправляет его перед SIGKILL при time limit).
+    # Это даёт нам шанс обновить статус в БД перед принудительным завершением.
+    def _handle_sigterm(signum, frame):
+        logger.warning(
+            "va_parser received SIGTERM (likely time limit) account_id=%s task_id=%s",
+            account_id,
+            task_id,
+        )
+        try:
+            AccountVideoAnalytics.objects.filter(pk=account_id).update(
+                parser_status=AccountVideoAnalytics.PARSER_STATUS_ERROR,
+                parser_last_error="Terminated by SIGTERM (time limit exceeded)",
+                parser_stopped_at=timezone.now(),
+                parser_heartbeat_at=timezone.now(),
+            )
+        except Exception:
+            logger.exception("Failed to update status on SIGTERM")
+        # Не вызываем sys.exit() — пусть процесс завершится естественно
+    
+    signal.signal(signal.SIGTERM, _handle_sigterm)
+
     client = VAApiClient(account_id=account_id, base_url=ctx.base_url)
     last_stop_check = 0.0
     last_hb = 0.0
     auth_failures = 0
+    sse_failures = 0
 
     def should_stop(now_monotonic: float) -> bool:
         nonlocal last_stop_check
@@ -224,7 +259,55 @@ def run_parse_event(
                 continue
 
             # SSE loop
-            listen_sse(client=client, account_id=account_id, should_stop=should_stop, heartbeat=maybe_heartbeat, write=write)
+            sse_t0 = time.monotonic()
+            listen_sse(
+                client=client,
+                account_id=account_id,
+                should_stop=should_stop,
+                heartbeat=maybe_heartbeat,
+                write=write,
+                timeout=(float(ctx.sse_connect_timeout_sec), float(ctx.sse_read_timeout_sec)),
+            )
+
+            # Если stop был запрошен во время SSE — выходим.
+            if _stop_requested(account_id):
+                _mark_stopping(account_id)
+                break
+
+            # SSE разорван (таймаут/сеть/сервер). Делаем backoff перед переподключением.
+            elapsed = time.monotonic() - sse_t0
+            if elapsed >= 30.0:
+                # Сессия прожила достаточно — считаем это "нормальным" обрывом, сбрасываем счётчик.
+                sse_failures = 0
+            else:
+                sse_failures += 1
+
+            base = float(ctx.sse_reconnect_backoff_base_sec)
+            max_d = float(ctx.sse_reconnect_backoff_max_sec)
+            delay = min(max_d, base * (2 ** max(0, sse_failures - 1)))
+            delay = delay + random.random() * 0.3  # небольшой джиттер
+            logger.info(
+                "va_parser sse_reconnect_scheduled account_id=%s in_sec=%.1f failures=%s last_elapsed_sec=%.1f",
+                account_id,
+                delay,
+                sse_failures,
+                elapsed,
+            )
+
+            slept = 0.0
+            while slept < delay:
+                now_m = time.monotonic()
+                maybe_heartbeat(now_m)
+                if should_stop(now_m):
+                    _mark_stopping(account_id)
+                    break
+                step = min(1.0, delay - slept)
+                time.sleep(step)
+                slept += step
+
+            if _stop_requested(account_id):
+                _mark_stopping(account_id)
+                break
 
         _mark_stopped(account_id)
     except Exception as e:
@@ -240,6 +323,7 @@ def listen_sse(
     should_stop: Callable[[float], bool],
     heartbeat: Callable[[float], None],
     write: Callable[[str], None],
+    timeout: tuple[float, float],
 ) -> None:
     sse_path = "/sse-holder/api/v1/sse?platform=WEB&ngsw-bypass"
     headers = {
@@ -248,9 +332,15 @@ def listen_sse(
     }
 
     response = None
+    started_m = time.monotonic()
     try:
-        logger.info("va_parser sse_connect account_id=%s path=%s", account_id, sse_path)
-        response = client.request("GET", sse_path, headers=headers, stream=True)
+        logger.info(
+            "va_parser sse_connect account_id=%s path=%s timeout=%s",
+            account_id,
+            sse_path,
+            timeout,
+        )
+        response = client.request("GET", sse_path, headers=headers, stream=True, timeout=timeout)
         logger.info(
             "va_parser sse_connected account_id=%s status_code=%s",
             account_id,
@@ -290,13 +380,16 @@ def listen_sse(
                 continue
 
     except Exception as e:
+        elapsed = time.monotonic() - started_m
         write(f"Error in SSE: {e}")
 
         # Отдельно логируем, чтобы в journalctl было видно причину обрыва SSE.
         logger.warning(
-            "va_parser sse_error account_id=%s err=%s",
+            "va_parser sse_error account_id=%s err=%s elapsed_sec=%.1f timeout=%s",
             account_id,
             str(e),
+            elapsed,
+            timeout,
             exc_info=True,
         )
         return

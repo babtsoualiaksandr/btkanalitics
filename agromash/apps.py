@@ -1,4 +1,5 @@
 from django.apps import AppConfig
+import html
 import threading
 import requests
 import time
@@ -120,6 +121,9 @@ class AgromashConfig(AppConfig):
                     hrs = mins // 60
                     return f"{hrs}h"
 
+                def _h(v) -> str:
+                    return html.escape(str(v or ""))
+
                 def _heart_icon(acc: AccountVideoAnalytics) -> str:
                     # Пользователь просил «сердце бьётся / нет».
                     if acc.is_parser_running:
@@ -139,8 +143,8 @@ class AgromashConfig(AppConfig):
                 def _parsers_text() -> str:
                     accounts = list(AccountVideoAnalytics.objects.all().order_by("id"))
                     lines = [
-                        "Parser Status (VA accounts)",
-                        "Легенда: 💓 online | 💔 нет heartbeat | ⏹ stopped | ⏳ переход | ⚠️ error",
+                        "<b>Parser Status (VA accounts)</b>",
+                        "<i>Легенда:</i> 💓 online | 💔 нет heartbeat | ⏹ stopped | ⏳ переход | ⚠️ error",
                         "",
                     ]
                     for a in accounts:
@@ -148,13 +152,17 @@ class AgromashConfig(AppConfig):
                         task = (getattr(a, "parser_task_id", None) or "-")
                         status = getattr(a, "parser_status", "-")
                         lines.append(
-                            f"{_heart_icon(a)} #{a.id} {a.name} | {a.organization} | {status} | hb={hb} | task={task}"
+                            (
+                                f"{_heart_icon(a)} <code>#{_h(a.id)}</code> "
+                                f"{_h(a.name)} | {_h(a.organization)} | "
+                                f"<b>{_h(status)}</b> | hb=<code>{_h(hb)}</code> | task=<code>{_h(task)}</code>"
+                            )
                         )
                         if getattr(a, "parser_last_error", None) and status == AccountVideoAnalytics.PARSER_STATUS_ERROR:
                             err = str(a.parser_last_error).strip().splitlines()[0][:120]
-                            lines.append(f"    error: {err}")
+                            lines.append(f"<i>error:</i> <code>{_h(err)}</code>")
                     if len(accounts) == 0:
-                        lines.append("Нет AccountVideoAnalytics")
+                        lines.append("<i>Нет AccountVideoAnalytics</i>")
                     return "\n".join(lines)
 
                 def _parsers_keyboard() -> dict:
@@ -167,11 +175,20 @@ class AgromashConfig(AppConfig):
                     for a in AccountVideoAnalytics.objects.all().order_by("id"):
                         if a.is_parser_running:
                             rows.append([
-                                {"text": f"Stop #{a.id}", "callback_data": f"va:stop:{a.id}"},
+                                # Telegram inline keyboard не поддерживает "цвет" кнопок.
+                                # Используем emoji-индикаторы как визуальный эквивалент:
+                                #   🟥 stop / 🟩 start / 🟧 restart (running, но heartbeat протух)
+                                {"text": f"🟥 Stop #{a.id}", "callback_data": f"va:stop:{a.id}"},
                             ])
                         else:
+                            # Если статус running, но heartbeat протух — это фактически "restart".
+                            label = (
+                                f"🟧 Restart #{a.id}"
+                                if a.parser_status == AccountVideoAnalytics.PARSER_STATUS_RUNNING
+                                else f"🟩 Start #{a.id}"
+                            )
                             rows.append([
-                                {"text": f"Start #{a.id}", "callback_data": f"va:start:{a.id}"},
+                                {"text": label, "callback_data": f"va:start:{a.id}"},
                             ])
                     return {"inline_keyboard": rows}
 
@@ -181,6 +198,8 @@ class AgromashConfig(AppConfig):
                         {
                             "chat_id": int(chat_id),
                             "text": _parsers_text(),
+                            "parse_mode": "HTML",
+                            "disable_web_page_preview": True,
                             "reply_markup": _parsers_keyboard(),
                         },
                     )
@@ -264,7 +283,14 @@ class AgromashConfig(AppConfig):
 
                                         payload = {
                                             "chat_id": chat_id,
-                                            "text": f"Вы подписаны. chat_id={chat_id}\nКоманды: /set <monitor_id>\nДля отчётов используйте Mini App.",
+                                            "text": (
+                                                "<b>Вы подписаны</b>\n"
+                                                f"<code>chat_id={_h(chat_id)}</code>\n"
+                                                "Команды: <code>/set &lt;monitor_id&gt;</code>\n"
+                                                "Для отчётов используйте Mini App."
+                                            ),
+                                            "parse_mode": "HTML",
+                                            "disable_web_page_preview": True,
                                         }
                                         if webapp_url:
                                             payload["reply_markup"] = {
@@ -281,7 +307,7 @@ class AgromashConfig(AppConfig):
                                         if not _is_admin(chat_id):
                                             _tg_post(
                                                 "sendMessage",
-                                                {"chat_id": chat_id, "text": "Доступ запрещён"},
+                                                {"chat_id": chat_id, "text": "⛔ <b>Доступ запрещён</b>", "parse_mode": "HTML"},
                                             )
                                             continue
                                         _admin_send_parsers(chat_id)
@@ -291,7 +317,7 @@ class AgromashConfig(AppConfig):
                                         if not _is_admin(chat_id):
                                             _tg_post(
                                                 "sendMessage",
-                                                {"chat_id": chat_id, "text": "Доступ запрещён"},
+                                                {"chat_id": chat_id, "text": "⛔ <b>Доступ запрещён</b>", "parse_mode": "HTML"},
                                             )
                                             continue
                                         parts = text.split()
@@ -300,7 +326,8 @@ class AgromashConfig(AppConfig):
                                                 "sendMessage",
                                                 {
                                                     "chat_id": chat_id,
-                                                    "text": "Использование: /parser <id> start|stop",
+                                                    "text": "Использование: <code>/parser &lt;id&gt; start|stop</code>",
+                                                    "parse_mode": "HTML",
                                                 },
                                             )
                                             continue
@@ -309,7 +336,7 @@ class AgromashConfig(AppConfig):
                                         except Exception:
                                             _tg_post(
                                                 "sendMessage",
-                                                {"chat_id": chat_id, "text": "id должен быть числом"},
+                                                {"chat_id": chat_id, "text": "id должен быть числом", "parse_mode": "HTML"},
                                             )
                                             continue
                                         action = str(parts[2]).strip().lower()
@@ -318,7 +345,7 @@ class AgromashConfig(AppConfig):
                                         msg = _admin_toggle(action=action, account_id=account_id)
                                         _tg_post(
                                             "sendMessage",
-                                            {"chat_id": chat_id, "text": msg},
+                                            {"chat_id": chat_id, "text": f"ℹ️ { _h(msg) }", "parse_mode": "HTML"},
                                         )
                                         continue
 
@@ -375,7 +402,7 @@ class AgromashConfig(AppConfig):
                                     if not _is_admin(from_id) and not _is_admin(chat_id):
                                         _tg_post(
                                             "sendMessage",
-                                            {"chat_id": chat_id, "text": "Доступ запрещён"},
+                                            {"chat_id": chat_id, "text": "⛔ <b>Доступ запрещён</b>", "parse_mode": "HTML"},
                                         )
                                     else:
                                         # va:refresh | va:start:<id> | va:stop:<id>
@@ -389,6 +416,8 @@ class AgromashConfig(AppConfig):
                                                         "chat_id": chat_id,
                                                         "message_id": message_id,
                                                         "text": _parsers_text(),
+                                                        "parse_mode": "HTML",
+                                                        "disable_web_page_preview": True,
                                                         "reply_markup": _parsers_keyboard(),
                                                     },
                                                 )
@@ -406,13 +435,15 @@ class AgromashConfig(AppConfig):
                                                             "chat_id": chat_id,
                                                             "message_id": message_id,
                                                             "text": _parsers_text(),
+                                                            "parse_mode": "HTML",
+                                                            "disable_web_page_preview": True,
                                                             "reply_markup": _parsers_keyboard(),
                                                         },
                                                     )
                                                 if chat_id:
                                                     _tg_post(
                                                         "sendMessage",
-                                                        {"chat_id": chat_id, "text": res_text},
+                                                        {"chat_id": chat_id, "text": f"ℹ️ { _h(res_text) }", "parse_mode": "HTML"},
                                                     )
 
 

@@ -238,6 +238,14 @@ class AccountVideoAnalyticsAdmin(admin.ModelAdmin):
         return custom_urls + urls
 
     def parser_status_badge(self, obj: AccountVideoAnalytics):
+        """Бейдж статуса парсера с учётом heartbeat.
+        
+        Важно: если parser_status=running, но heartbeat устарел (>2 мин) —
+        is_parser_running вернёт False, и бейдж покажет реальное состояние.
+        
+        Рассинхронизация (статус=running, но heartbeat старый) автоматически
+        корректируется периодической задачей `agromash.check_parser_heartbeats`.
+        """
         status = obj.parser_status
         if obj.is_parser_running:
             status = AccountVideoAnalytics.PARSER_STATUS_RUNNING

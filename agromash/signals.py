@@ -8,6 +8,7 @@ from .services.alarm_data_parser import format_alarm_caption, parse_alarm_data
 from django.conf import settings
 
 import logging
+import html
 
 from .va_api_client import VAApiClient
 from .services.telegram_client import send_message, send_photo
@@ -15,6 +16,50 @@ from .services.plate_identities import extract_plate_rows
 
 
 logger = logging.getLogger(__name__)
+
+
+def _alarm_topic_icon(topic: str) -> str:
+    """"Разноцветный" индикатор (реальных цветов в тексте Telegram нет).
+
+    Telegram Bot API не поддерживает цвет текста/частей сообщения.
+    Поэтому используем emoji-маркеры как визуальный аналог.
+    """
+
+    t = str(topic or "")
+    return {
+        "PlateMatched": "🟢",
+        "PlateNotMatched": "🟠",
+        "FaceNotMatched": "🔵",
+        "LineCrossed": "🟡",
+    }.get(t, "🔴")
+
+
+def _trim_tg_caption(text: str, limit: int = 1024) -> str:
+    """Обрезать подпись к фото под лимит Telegram."""
+
+    s = str(text or "")
+    if len(s) <= limit:
+        return s
+    return s[: max(0, limit - 1)] + "…"
+
+
+def _format_alarm_caption_html(*, topic: str, caption_plain: str) -> str:
+    """HTML-caption для Telegram (поддерживается в sendPhoto caption).
+
+    Важно: Telegram не умеет цвета в тексте, поэтому "разноцветность" даём через emoji.
+    """
+
+    icon = _alarm_topic_icon(topic)
+    # caption_plain у нас уже человекочитаемый (topic | monitor | channel | ...)
+    # Переводим в многострочный вид для читабельности.
+    parts = [p.strip() for p in str(caption_plain or "").split("|") if p.strip()]
+    head = html.escape(parts[0]) if parts else html.escape(str(topic or "Alarm"))
+    tail = parts[1:]
+
+    lines: list[str] = [f"{icon} <b>{head}</b>"]
+    for p in tail:
+        lines.append(f"• {html.escape(p)}")
+    return _trim_tg_caption("\n".join(lines))
 
 
 def _telegram_send_message(*, chat_id: int, text: str) -> None:
@@ -84,6 +129,9 @@ def send_alarm_to_telegram(sender, instance, created, **kwargs):
                             )
                             caption = f"New alarm: {instance.topic}"
 
+                        # "Разноцветный" caption для Telegram (реальные цвета в тексте не поддерживаются).
+                        caption_html = _format_alarm_caption_html(topic=instance.topic, caption_plain=caption)
+
                         # Шлем только тем подписчикам, кто подписан на монитор алерта.
                         # (Ранее отправлялось всем, игнорируя настройки подписок.)
                         chat_ids_list = _get_alarm_subscribers_chat_ids(instance)
@@ -93,7 +141,8 @@ def send_alarm_to_telegram(sender, instance, created, **kwargs):
                                 filename="snapshot.jpg",
                                 content=img_resp.content,
                                 mime_type="image/jpeg",
-                                caption=caption,
+                                caption=caption_html,
+                                parse_mode="HTML",
                                 alarm=instance,
                                 meta={
                                     "source": "alarm_signal",

@@ -181,13 +181,28 @@ CELERY_WORKER_PREFETCH_MULTIPLIER = config('CELERY_WORKER_PREFETCH_MULTIPLIER', 
 CELERY_TASK_ACKS_LATE = True
 
 # Для «вечных» задач Celery (long-running loops) глобальный time limit не подходит.
-# Отключаем ограничения времени только для парсера SSE.
 #
-# Важно: остальные задачи продолжают использовать глобальные лимиты выше.
+# Важно: в некоторых версиях Celery/конфигурациях значение `None` для time_limit
+# в аннотациях/декораторе может интерпретироваться как «использовать дефолтный лимит».
+# Чтобы гарантированно не получать TimeLimitExceeded/SoftTimeLimitExceeded,
+# ставим очень большой лимит (по сути «безлимит»).
+#
+# Остальные задачи продолжают использовать глобальные лимиты выше.
+VA_PARSER_TIME_LIMIT_SEC = 60 * 60 * 24 * 365 * 10  # 10 лет
+VA_PARSER_SOFT_TIME_LIMIT_SEC = VA_PARSER_TIME_LIMIT_SEC - 60  # даём 60с на graceful shutdown
+
+# Для SSE-парсера переопределяем лимиты времени.
+#
 CELERY_TASK_ANNOTATIONS = {
     "agromash.parse_event": {
-        "time_limit": None,
-        "soft_time_limit": None,
+        "time_limit": VA_PARSER_TIME_LIMIT_SEC,
+        "soft_time_limit": VA_PARSER_SOFT_TIME_LIMIT_SEC,
+    },
+    # На всякий случай добавляем алиас по полному пути функции.
+    # (В норме используется name из декоратора, но это защищает от рассинхрона.)
+    "agromash.tasks.parse_event_task": {
+        "time_limit": VA_PARSER_TIME_LIMIT_SEC,
+        "soft_time_limit": VA_PARSER_SOFT_TIME_LIMIT_SEC,
     },
 }
 
@@ -200,6 +215,11 @@ CELERY_BEAT_SCHEDULE = {
     "send_due_email_reports_every_minute": {
         "task": "agromash.send_due_email_reports",
         "schedule": 60.0,
+    },
+    # Мониторинг heartbeat парсеров (каждые 2 минуты)
+    "check_parser_heartbeats_every_2_min": {
+        "task": "agromash.check_parser_heartbeats",
+        "schedule": 120.0,
     },
 }
 
