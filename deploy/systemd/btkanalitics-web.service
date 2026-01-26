@@ -1,5 +1,5 @@
 [Unit]
-Description=btkanalitics Django dev server (runserver)
+Description=btkanalitics Django (gunicorn)
 PartOf=btkanalitics.target
 After=network.target
 
@@ -12,7 +12,8 @@ WorkingDirectory=/home/sshbeltelecom/va/btkanalitics
 EnvironmentFile=/home/sshbeltelecom/va/btkanalitics/.env
 
 # Запуск через virtualenv (у вас: /home/sshbeltelecom/va/venv/bin)
-ExecStart=/usr/bin/env bash -lc '/home/sshbeltelecom/va/venv/bin/python manage.py runserver 0.0.0.0:8091'
+# ExecStart=/usr/bin/env bash -lc '/home/sshbeltelecom/va/venv/bin/python manage.py runserver 0.0.0.0:8091'
+ExecStart=/usr/bin/env bash -lc '/home/sshbeltelecom/va/venv/bin/gunicorn btkanalitics.wsgi:application --bind 0.0.0.0:8091 --workers 3 --threads 2'
 
 Restart=always
 RestartSec=5
