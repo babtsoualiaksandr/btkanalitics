@@ -309,6 +309,10 @@ class VAApiClient:
                         attempt,
                         self._max_attempts,
                     )
+                    last_exc = VAAuthError(
+                        f"401 даже после login (account_id={self._account_id})",
+                        status_code=401,
+                    )
                     self._backoff(attempt)
                     continue
 
@@ -321,6 +325,9 @@ class VAApiClient:
                         self._account_id,
                         attempt,
                         self._max_attempts,
+                    )
+                    last_exc = RuntimeError(
+                        f"VA API: сервер вернул {resp.status_code} (account_id={self._account_id})"
                     )
                     self._backoff(attempt)
                     continue

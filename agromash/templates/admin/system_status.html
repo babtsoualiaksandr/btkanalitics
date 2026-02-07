@@ -195,16 +195,33 @@
         const l = (line || "").toLowerCase();
         if (!l.includes("va_parser")) return "";
 
-        // lifecycle
+        // Ошибки (красный) — приоритет выше остальных
         if (l.includes(" mark_error ") || l.includes(" mark_error")) return "error";
+        if (l.includes("sse_auth_failed")) return "error";
+        if (l.includes("sse_error")) return "error";
+        if (l.includes("auth_failed")) return "error";
+        if (l.includes("login failed")) return "error";
+        if (l.includes("failed")) return "error";
+        if (l.includes("exception")) return "error";
+        if (l.includes("traceback")) return "error";
+
+        // lifecycle
         if (l.includes(" mark_stopped ") || l.includes(" mark_stopped")) return "stopped";
         if (l.includes(" mark_stopping ") || l.includes(" mark_stopping")) return "stopping";
         if (l.includes(" mark_started ") || l.includes(" mark_started")) return "started";
         if (l.includes(" mark_starting ") || l.includes(" mark_starting")) return "starting";
 
-        // sse/auth
-        if (l.includes(" sse_") || l.includes(" sse")) return "sse";
-        if (l.includes(" auth_failed") || l.includes(" login failed")) return "auth";
+        // sse (голубой) — только успешные события
+        if (l.includes("sse_connected")) return "sse";
+        if (l.includes("sse_connect ")) return "sse";
+        if (l.includes("sse_disconnected")) return "sse";
+        if (l.includes("sse_reconnect_scheduled")) return "sse";
+
+        // auth (жёлтый) — информационные сообщения об аутентификации
+        if (l.includes("authenticate ok")) return "auth";
+        if (l.includes("refresh успешен")) return "auth";
+        if (l.includes("access_token")) return "auth";
+
         return "";
       }
 

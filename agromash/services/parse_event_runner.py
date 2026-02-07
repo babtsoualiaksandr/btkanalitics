@@ -17,6 +17,13 @@ from agromash.va_api_client import VAApiClient, VAAuthError
 logger = logging.getLogger(__name__)
 
 
+# Значения по умолчанию для SSE-парсера (можно переопределить в settings.py)
+_DEFAULT_SSE_CONNECT_TIMEOUT = getattr(settings, "VA_SSE_CONNECT_TIMEOUT_SEC", 15.0)
+_DEFAULT_SSE_READ_TIMEOUT = getattr(settings, "VA_SSE_READ_TIMEOUT_SEC", 60.0 * 60.0)
+_DEFAULT_MAX_AUTH_FAILURES = getattr(settings, "VA_MAX_AUTH_FAILURES", 3)
+_DEFAULT_MAX_SSE_FAILURES = getattr(settings, "VA_MAX_SSE_FAILURES", 10)
+
+
 @dataclass
 class ParserRunContext:
     account_id: int
@@ -28,18 +35,26 @@ class ParserRunContext:
 
     # Ограничение числа подряд неуспешных попыток аутентификации.
     # Нужно, чтобы при неверных кредах/429 не крутить бесконечный цикл login.
-    max_auth_failures: int = 3
+    max_auth_failures: int = _DEFAULT_MAX_AUTH_FAILURES
 
     # --- SSE tuning ---
     # requests timeout is (connect_timeout, read_timeout)
     # Для SSE read_timeout должен быть большим, иначе при отсутствии данных > N секунд
     # requests/urllib3 выбрасывают ReadTimeoutError.
-    sse_connect_timeout_sec: float = 7.0
-    sse_read_timeout_sec: float = 60.0 * 60.0  # 1 hour
+    #
+    # Настройки можно переопределить в settings.py:
+    #   VA_SSE_CONNECT_TIMEOUT_SEC = 15.0  # таймаут на установку соединения
+    #   VA_SSE_READ_TIMEOUT_SEC = 3600.0   # таймаут на чтение (1 час)
+    sse_connect_timeout_sec: float = _DEFAULT_SSE_CONNECT_TIMEOUT
+    sse_read_timeout_sec: float = _DEFAULT_SSE_READ_TIMEOUT
 
     # Backoff между переподключениями (если SSE рвётся по таймауту/сети)
     sse_reconnect_backoff_base_sec: float = 1.0
     sse_reconnect_backoff_max_sec: float = 30.0
+
+    # Ограничение числа подряд неуспешных попыток SSE (короткоживущих сессий).
+    # Если SSE рвётся слишком часто (< 30 сек) — считаем это критической ошибкой.
+    max_sse_failures: int = _DEFAULT_MAX_SSE_FAILURES
 
 
 def _mark_started(account_id: int, *, task_id: Optional[str]) -> None:
@@ -84,6 +99,7 @@ def _mark_error(account_id: int, *, error_text: str) -> None:
     now = timezone.now()
     AccountVideoAnalytics.objects.filter(pk=account_id).update(
         parser_status=AccountVideoAnalytics.PARSER_STATUS_ERROR,
+        parser_task_id=None,  # Сбрасываем task_id, чтобы можно было перезапустить
         parser_last_error=error_text[:5000],
         parser_stopped_at=now,
         parser_heartbeat_at=now,
@@ -260,14 +276,31 @@ def run_parse_event(
 
             # SSE loop
             sse_t0 = time.monotonic()
-            listen_sse(
-                client=client,
-                account_id=account_id,
-                should_stop=should_stop,
-                heartbeat=maybe_heartbeat,
-                write=write,
-                timeout=(float(ctx.sse_connect_timeout_sec), float(ctx.sse_read_timeout_sec)),
-            )
+            sse_error: Optional[Exception] = None
+            try:
+                listen_sse(
+                    client=client,
+                    account_id=account_id,
+                    should_stop=should_stop,
+                    heartbeat=maybe_heartbeat,
+                    write=write,
+                    timeout=(float(ctx.sse_connect_timeout_sec), float(ctx.sse_read_timeout_sec)),
+                )
+            except VAAuthError as e:
+                # SSE вернул 401 даже после login — считаем это auth failure
+                sse_error = e
+                auth_failures += 1
+                logger.warning(
+                    "va_parser sse_auth_failed account_id=%s task_id=%s failures=%s max=%s err=%s",
+                    account_id,
+                    task_id,
+                    auth_failures,
+                    ctx.max_auth_failures,
+                    str(e),
+                )
+                if auth_failures >= int(ctx.max_auth_failures):
+                    _mark_error(account_id, error_text=f"SSE auth failed {auth_failures} times: {e}")
+                    return
 
             # Если stop был запрошен во время SSE — выходим.
             if _stop_requested(account_id):
@@ -277,10 +310,19 @@ def run_parse_event(
             # SSE разорван (таймаут/сеть/сервер). Делаем backoff перед переподключением.
             elapsed = time.monotonic() - sse_t0
             if elapsed >= 30.0:
-                # Сессия прожила достаточно — считаем это "нормальным" обрывом, сбрасываем счётчик.
+                # Сессия прожила достаточно — считаем это "нормальным" обрывом, сбрасываем счётчики.
                 sse_failures = 0
+                auth_failures = 0
             else:
                 sse_failures += 1
+
+            # Проверяем лимит SSE failures (короткоживущих сессий)
+            if sse_failures >= int(ctx.max_sse_failures):
+                err_msg = f"SSE failed {sse_failures} times in a row (sessions < 30s)"
+                if sse_error:
+                    err_msg += f": {sse_error}"
+                _mark_error(account_id, error_text=err_msg)
+                return
 
             base = float(ctx.sse_reconnect_backoff_base_sec)
             max_d = float(ctx.sse_reconnect_backoff_max_sec)
@@ -379,6 +421,9 @@ def listen_sse(
                 data = line[5:]
                 continue
 
+    except VAAuthError:
+        # Пробрасываем auth-ошибки наверх для корректного учёта auth_failures
+        raise
     except Exception as e:
         elapsed = time.monotonic() - started_m
         write(f"Error in SSE: {e}")

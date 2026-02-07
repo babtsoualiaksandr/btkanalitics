@@ -206,6 +206,26 @@ CELERY_TASK_ANNOTATIONS = {
     },
 }
 
+# -----------------
+# VA SSE Parser settings
+# -----------------
+# Таймаут на установку соединения с SSE endpoint (секунды).
+# Если сервер VA медленно отвечает — увеличьте это значение.
+VA_SSE_CONNECT_TIMEOUT_SEC = config('VA_SSE_CONNECT_TIMEOUT_SEC', default=15.0, cast=float)
+
+# Таймаут на чтение данных из SSE (секунды).
+# Должен быть большим, т.к. SSE — долгоживущее соединение.
+VA_SSE_READ_TIMEOUT_SEC = config('VA_SSE_READ_TIMEOUT_SEC', default=3600.0, cast=float)
+
+# Максимальное число подряд неудачных попыток аутентификации.
+VA_MAX_AUTH_FAILURES = config('VA_MAX_AUTH_FAILURES', default=3, cast=int)
+
+# Максимальное число подряд неудачных SSE-сессий (< 30 сек).
+VA_MAX_SSE_FAILURES = config('VA_MAX_SSE_FAILURES', default=10, cast=int)
+
+# Время ожидания перед автоматическим перезапуском парсера в статусе error (минуты).
+PARSER_AUTO_RESTART_DELAY_MIN = config('PARSER_AUTO_RESTART_DELAY_MIN', default=5, cast=int)
+
 # Периодические задачи (Celery Beat)
 CELERY_BEAT_SCHEDULE = {
     "send_due_telegram_reports_every_minute": {
@@ -219,6 +239,11 @@ CELERY_BEAT_SCHEDULE = {
     # Мониторинг heartbeat парсеров (каждые 2 минуты)
     "check_parser_heartbeats_every_2_min": {
         "task": "agromash.check_parser_heartbeats",
+        "schedule": 120.0,
+    },
+    # Автоматический перезапуск парсеров в статусе error (каждые 2 минуты)
+    "auto_restart_error_parsers_every_2_min": {
+        "task": "agromash.auto_restart_error_parsers",
         "schedule": 120.0,
     },
 }

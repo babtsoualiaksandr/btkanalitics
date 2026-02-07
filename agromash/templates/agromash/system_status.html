@@ -105,6 +105,154 @@
     </tbody>
   </table>
 
+  <h2>VA parser lifecycle logs</h2>
+  <div class="muted">
+    Показаны строки из <code>{{ va_parser_logs.unit }}</code>, содержащие <code>va_parser</code>.
+    Можно фильтровать: GET <code>?va_log_q=mark_error</code> (несколько слов через пробел = AND).
+  </div>
+
+  <style>
+    /* VA log highlighting */
+    .va-logline { display: block; white-space: pre; }
+    .va-logline.starting { color: #ffcc66; }
+    .va-logline.started { color: #7CFC90; }
+    .va-logline.stopping { color: #ff9966; }
+    .va-logline.stopped { color: #b8c0d0; }
+    .va-logline.error { color: #ff6b6b; font-weight: 600; }
+    .va-logline.sse { color: #7fd3ff; }
+    .va-logline.auth { color: #ffd166; }
+    .va-loglegend code { padding: 1px 6px; border-radius: 6px; background: #0b1020; color: #e8eeff; }
+  </style>
+
+  <p class="muted">rc={{ va_parser_logs.rc }} | unit=<code>{{ va_parser_logs.unit }}</code></p>
+  {% if va_parser_logs.err %}
+    <pre class="logbox">{{ va_parser_logs.err }}</pre>
+  {% endif %}
+
+  <p>
+    <label class="muted" for="va-log-filter">Фильтр (по подстроке):</label>
+    <input id="va-log-filter" type="text" style="min-width: 360px;" placeholder="например: mark_error account_id=3" value="{{ va_parser_logs.q|default:'' }}" />
+    <button type="button" id="va-log-apply">Применить</button>
+    <a href="?">Сброс</a>
+    <span class="muted" id="va-log-count"></span>
+  </p>
+
+  <p class="muted va-loglegend">
+    Легенда:
+    <code style="color:#ffcc66">starting</code>
+    <code style="color:#7CFC90">started</code>
+    <code style="color:#ff9966">stopping</code>
+    <code style="color:#b8c0d0">stopped</code>
+    <code style="color:#ff6b6b">error</code>
+    <code style="color:#7fd3ff">sse</code>
+    <code style="color:#ffd166">auth</code>
+  </p>
+
+  <pre class="logbox" id="va-log-box" data-mode="plain">{{ va_parser_logs.text }}</pre>
+
+  <script>
+    (function () {
+      function escapeHtml(s) {
+        return String(s || "")
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/\"/g, "&quot;")
+          .replace(/'/g, "&#39;");
+      }
+
+      function classify(line) {
+        const l = (line || "").toLowerCase();
+        if (!l.includes("va_parser")) return "";
+
+        // Ошибки (красный) — приоритет выше остальных
+        if (l.includes(" mark_error ") || l.includes(" mark_error")) return "error";
+        if (l.includes("sse_auth_failed")) return "error";
+        if (l.includes("sse_error")) return "error";
+        if (l.includes("auth_failed")) return "error";
+        if (l.includes("login failed")) return "error";
+        if (l.includes("failed")) return "error";
+        if (l.includes("exception")) return "error";
+        if (l.includes("traceback")) return "error";
+
+        // lifecycle
+        if (l.includes(" mark_stopped ") || l.includes(" mark_stopped")) return "stopped";
+        if (l.includes(" mark_stopping ") || l.includes(" mark_stopping")) return "stopping";
+        if (l.includes(" mark_started ") || l.includes(" mark_started")) return "started";
+        if (l.includes(" mark_starting ") || l.includes(" mark_starting")) return "starting";
+
+        // sse (голубой) — только успешные события
+        if (l.includes("sse_connected")) return "sse";
+        if (l.includes("sse_connect ")) return "sse";
+        if (l.includes("sse_disconnected")) return "sse";
+        if (l.includes("sse_reconnect_scheduled")) return "sse";
+
+        // auth (жёлтый) — информационные сообщения об аутентификации
+        if (l.includes("authenticate ok")) return "auth";
+        if (l.includes("refresh успешен")) return "auth";
+        if (l.includes("access_token")) return "auth";
+
+        return "";
+      }
+
+      function renderLines(el, lines) {
+        const chunks = [];
+        for (const ln of (lines || [])) {
+          const cls = classify(ln);
+          const classAttr = cls ? `va-logline ${cls}` : "va-logline";
+          chunks.push(`<span class=\"${classAttr}\">${escapeHtml(ln)}</span>`);
+        }
+        el.innerHTML = chunks.join("");
+        el.dataset.mode = "html";
+      }
+
+      const box = document.getElementById("va-log-box");
+      const input = document.getElementById("va-log-filter");
+      const btn = document.getElementById("va-log-apply");
+      const countEl = document.getElementById("va-log-count");
+
+      if (!box || !input || !btn) return;
+
+      const raw = box.textContent || "";
+      const rawLines = raw ? raw.split("\n") : [];
+
+      function apply() {
+        const q = (input.value || "").trim().toLowerCase();
+        if (!q) {
+          renderLines(box, rawLines);
+          if (countEl) countEl.textContent = "";
+          return;
+        }
+        const tokens = q.split(/\s+/g).filter(Boolean);
+        const out = [];
+        for (const ln of rawLines) {
+          const ll = ln.toLowerCase();
+          let ok = true;
+          for (const t of tokens) {
+            if (!ll.includes(t)) {
+              ok = false;
+              break;
+            }
+          }
+          if (ok) out.push(ln);
+        }
+        renderLines(box, out);
+        if (countEl) countEl.textContent = `строк: ${out.length}`;
+      }
+
+      btn.addEventListener("click", apply);
+      input.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          apply();
+        }
+      });
+
+      // initial render (colorize)
+      apply();
+    })();
+  </script>
+
   <h2>Логи systemd (последние 100 строк по каждому сервису)</h2>
   {% for j in service_logs %}
     <h3><code>{{ j.unit }}</code></h3>
