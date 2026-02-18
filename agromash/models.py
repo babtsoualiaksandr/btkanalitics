@@ -656,6 +656,28 @@ class FuelReport(models.Model):
     imported_ok = models.BooleanField(default=True, db_index=True)
     import_error = models.TextField(blank=True)
 
+    # --- Анализ (фоновая задача analyze_fuel_report) ---
+    ANALYSIS_STATUS_NONE = "none"
+    ANALYSIS_STATUS_PENDING = "pending"
+    ANALYSIS_STATUS_DONE = "done"
+    ANALYSIS_STATUS_ERROR = "error"
+    ANALYSIS_STATUS_CHOICES = (
+        (ANALYSIS_STATUS_NONE, "Not started"),
+        (ANALYSIS_STATUS_PENDING, "Running"),
+        (ANALYSIS_STATUS_DONE, "Done"),
+        (ANALYSIS_STATUS_ERROR, "Error"),
+    )
+
+    analysis_status = models.CharField(
+        max_length=16,
+        choices=ANALYSIS_STATUS_CHOICES,
+        default=ANALYSIS_STATUS_NONE,
+        db_index=True,
+    )
+    analysis_task_id = models.CharField(max_length=255, blank=True)
+    analysis_error = models.TextField(blank=True)
+    analysis_finished_at = models.DateTimeField(null=True, blank=True)
+
     # --- Экспорт (кэш XLSX, чтобы не блокировать админку долгой генерацией) ---
     EXPORT_STATUS_NONE = "none"
     EXPORT_STATUS_PENDING = "pending"

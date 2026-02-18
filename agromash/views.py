@@ -280,6 +280,76 @@ def admin_systemd_log(request):
     return JsonResponse(_journal_tail(unit=unit, lines=100))
 
 
+@staff_member_required
+def admin_task_status(request):
+    """AJAX endpoint: статус Celery-задачи + статус FuelReport (если передан report_id).
+
+    Параметры GET:
+      - task_id: идентификатор Celery-задачи (опционально)
+      - report_id: PK FuelReport (опционально)
+
+    Возвращает JSON с полями:
+      - task_id, state, ready, successful, error, meta  (из Celery result backend)
+      - report.analysis_status, report.analysis_error, ...
+      - report.export_xlsx_status, report.export_xlsx_error, ...
+    """
+    from celery.result import AsyncResult
+    from agromash.models import FuelReport
+
+    task_id = (request.GET.get("task_id") or "").strip()
+    report_id = request.GET.get("report_id")
+
+    data: dict = {}
+
+    # 1) Статус из Celery result backend (Redis)
+    if task_id:
+        res = AsyncResult(task_id)
+        data["task_id"] = task_id
+        data["state"] = res.state  # PENDING / STARTED / SUCCESS / FAILURE / RETRY / PROGRESS
+        data["ready"] = res.ready()
+        data["successful"] = res.successful() if res.ready() else None
+        if res.failed():
+            data["error"] = str(res.result)
+        # meta (если задача пишет self.update_state)
+        if isinstance(res.info, dict):
+            data["meta"] = res.info
+
+    # 2) Статус из модели FuelReport
+    if report_id:
+        try:
+            rpt = FuelReport.objects.filter(pk=int(report_id)).values(
+                "analysis_status",
+                "analysis_error",
+                "analysis_task_id",
+                "analysis_finished_at",
+                "export_xlsx_status",
+                "export_xlsx_error",
+                "export_xlsx_generated_at",
+                "export_xlsx_task_id",
+            ).first()
+            if rpt:
+                data["report"] = {
+                    "analysis_status": rpt["analysis_status"],
+                    "analysis_error": rpt["analysis_error"] or "",
+                    "analysis_task_id": rpt["analysis_task_id"] or "",
+                    "analysis_finished_at": (
+                        rpt["analysis_finished_at"].isoformat()
+                        if rpt["analysis_finished_at"] else None
+                    ),
+                    "export_xlsx_status": rpt["export_xlsx_status"],
+                    "export_xlsx_error": rpt["export_xlsx_error"] or "",
+                    "export_xlsx_generated_at": (
+                        rpt["export_xlsx_generated_at"].isoformat()
+                        if rpt["export_xlsx_generated_at"] else None
+                    ),
+                    "export_xlsx_task_id": rpt["export_xlsx_task_id"] or "",
+                }
+        except Exception:
+            pass
+
+    return JsonResponse(data)
+
+
 @login_required
 def serve_snapshot(request, alarm_id):
     """

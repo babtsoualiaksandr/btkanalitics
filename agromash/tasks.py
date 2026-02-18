@@ -31,8 +31,24 @@ logger = logging.getLogger(__name__)
 def analyze_fuel_report_task(self, report_id: int, window_minutes: int = 10, source: str = "admin") -> None:
     """Celery-задача: выполнить анализ FuelOperation для конкретного FuelReport."""
     t0 = time.monotonic()
+    task_id = getattr(getattr(self, "request", None), "id", None)
+
+    # Отмечаем начало анализа
+    FuelReport.objects.filter(pk=report_id).update(
+        analysis_status=FuelReport.ANALYSIS_STATUS_PENDING,
+        analysis_task_id=str(task_id or ""),
+        analysis_error="",
+    )
+
     try:
         summary = analyze_fuel_report(report_id=report_id, window_minutes=int(window_minutes))
+
+        FuelReport.objects.filter(pk=report_id).update(
+            analysis_status=FuelReport.ANALYSIS_STATUS_DONE,
+            analysis_error="",
+            analysis_finished_at=timezone.now(),
+        )
+
         logger.info(
             "analyze_fuel_report done report_id=%s updated=%s with_pi=%s with_alarms=%s alarms_candidates=%s source=%s task_id=%s elapsed_ms=%s",
             report_id,
@@ -41,15 +57,20 @@ def analyze_fuel_report_task(self, report_id: int, window_minutes: int = 10, sou
             summary.operations_with_alarms,
             summary.alarms_candidates,
             source,
-            getattr(getattr(self, "request", None), "id", None),
+            task_id,
             int((time.monotonic() - t0) * 1000),
         )
-    except Exception:
+    except Exception as e:
+        FuelReport.objects.filter(pk=report_id).update(
+            analysis_status=FuelReport.ANALYSIS_STATUS_ERROR,
+            analysis_error=str(e),
+            analysis_finished_at=timezone.now(),
+        )
         logger.exception(
             "analyze_fuel_report failed report_id=%s source=%s task_id=%s",
             report_id,
             source,
-            getattr(getattr(self, "request", None), "id", None),
+            task_id,
         )
         raise
 

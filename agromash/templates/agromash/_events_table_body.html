@@ -24,6 +24,9 @@
       <div>{{ a.start_dt_local|date:"Y-m-d H:i:s" }}</div>
       <div class="btk-muted">до {{ a.end_dt_local|date:"Y-m-d H:i:s" }}</div>
     </td>
+    <td>
+      <div class="btk-case-desc">{{ a.case_description|default:"" }}</div>
+    </td>
     <td class="btk-col-actions">
       <button
         type="button"
@@ -37,11 +40,11 @@
   </tr>
 {% empty %}
   <tr>
-    <td colspan="6" class="btk-muted">Нет событий по выбранным фильтрам.</td>
+    <td colspan="7" class="btk-muted">Выберите мониторы для отображения событий.</td>
   </tr>
 {% endfor %}
 
 {# Плашка для клиентской фильтрации (когда строки есть, но все отфильтрованы) #}
 <tr class="js-client-empty" style="display:none">
-  <td colspan="6" class="btk-muted">Нет строк по текстовому фильтру.</td>
+  <td colspan="7" class="btk-muted">Нет строк по текстовому фильтру.</td>
 </tr>

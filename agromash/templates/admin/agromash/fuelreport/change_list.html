@@ -3,6 +3,26 @@
 {% block extrahead %}
   {{ block.super }}
   <style>
+    /* Task polling spinner */
+    @keyframes task-spin {
+      to { transform: rotate(360deg); }
+    }
+    .js-task-poll .js-task-label::before {
+      content: '';
+      display: inline-block;
+      width: 12px;
+      height: 12px;
+      border: 2px solid #ccc;
+      border-top-color: #417690;
+      border-radius: 50%;
+      animation: task-spin 0.8s linear infinite;
+      margin-right: 6px;
+      vertical-align: middle;
+    }
+    .js-task-done .js-task-label::before {
+      display: none;
+    }
+
     #fuelreport-send-dialog {
       width: min(900px, 92vw);
       padding: 0;
@@ -252,6 +272,103 @@
           if (dlgEnq) dlgEnq.close();
         });
       }
+    })();
+  </script>
+
+  {# --- Task status polling (анализ + XLSX генерация) --- #}
+  <script>
+    (function () {
+      const POLL_INTERVAL_MS = 2500;
+      const TASK_STATUS_URL = '{% url "admin_task_status" %}';
+
+      function pollTaskStatus(el) {
+        const reportId = el.getAttribute('data-report-id');
+        const taskId = el.getAttribute('data-task-id');
+        const taskType = el.getAttribute('data-task-type');  // "analysis" | "export"
+        const labelEl = el.querySelector('.js-task-label');
+        const hintEl = el.querySelector('.js-task-hint');
+
+        if (!reportId) return;
+
+        const params = new URLSearchParams();
+        if (taskId) params.set('task_id', taskId);
+        params.set('report_id', reportId);
+
+        const url = TASK_STATUS_URL + '?' + params.toString();
+
+        const interval = setInterval(async function () {
+          try {
+            const resp = await fetch(url);
+            if (!resp.ok) return;
+            const data = await resp.json();
+
+            const celeryState = data.state || '';
+            const report = data.report || {};
+
+            // Определяем статус из модели
+            let modelStatus = '';
+            if (taskType === 'analysis') {
+              modelStatus = report.analysis_status || '';
+            } else if (taskType === 'export') {
+              modelStatus = report.export_xlsx_status || '';
+            }
+
+            // Обновляем hint
+            if (celeryState === 'STARTED' || celeryState === 'PROGRESS') {
+              if (hintEl) hintEl.textContent = 'выполняется…';
+              // Если есть meta с прогрессом
+              if (data.meta && data.meta.percent !== undefined) {
+                if (hintEl) hintEl.textContent = data.meta.percent + '%';
+              }
+            }
+
+            // Проверяем завершение
+            let finished = false;
+            let success = false;
+            let errorText = '';
+
+            if (taskType === 'analysis') {
+              if (modelStatus === 'done') { finished = true; success = true; }
+              if (modelStatus === 'error') { finished = true; errorText = report.analysis_error || 'ошибка'; }
+            } else if (taskType === 'export') {
+              if (modelStatus === 'ready') { finished = true; success = true; }
+              if (modelStatus === 'error') { finished = true; errorText = report.export_xlsx_error || 'ошибка'; }
+            }
+
+            // Fallback: Celery state
+            if (!finished && data.ready) {
+              finished = true;
+              success = !!data.successful;
+              if (!success) errorText = data.error || 'ошибка';
+            }
+
+            if (finished) {
+              clearInterval(interval);
+              el.classList.add('js-task-done');
+
+              if (success) {
+                if (labelEl) labelEl.textContent = '✅ Готово';
+                if (hintEl) hintEl.textContent = 'обновите страницу';
+                // Автоматически обновляем страницу через 1.5 сек
+                setTimeout(function () { location.reload(); }, 1500);
+              } else {
+                if (labelEl) labelEl.textContent = '❌ Ошибка';
+                if (hintEl) {
+                  hintEl.style.color = '#a61e1e';
+                  hintEl.textContent = errorText.substring(0, 80) || 'ошибка';
+                }
+              }
+            }
+          } catch (e) {
+            console.error('Task poll error:', e);
+          }
+        }, POLL_INTERVAL_MS);
+      }
+
+      // Запускаем polling для всех элементов с классом js-task-poll
+      document.querySelectorAll('.js-task-poll').forEach(function (el) {
+        pollTaskStatus(el);
+      });
     })();
   </script>
 {% endblock %}

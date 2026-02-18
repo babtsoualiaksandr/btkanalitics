@@ -1022,6 +1022,10 @@ class FuelReportAdmin(admin.ModelAdmin):
         "imported_ok",
         "import_error",
         "source_sha256",
+        "analysis_status",
+        "analysis_task_id",
+        "analysis_error",
+        "analysis_finished_at",
         "export_xlsx_status",
         "export_xlsx_generated_at",
         "export_xlsx_task_id",
@@ -1108,6 +1112,42 @@ class FuelReportAdmin(admin.ModelAdmin):
 
     def _analyze_controls(self, request, obj: FuelReport):
         run_url = reverse("admin:agromash_fuelreport_run_analysis", args=[obj.pk])
+        status = getattr(obj, "analysis_status", FuelReport.ANALYSIS_STATUS_NONE)
+        task_id = getattr(obj, "analysis_task_id", "") or ""
+
+        if status == FuelReport.ANALYSIS_STATUS_PENDING:
+            return format_html(
+                '<div class="agromash-admin-action js-task-poll" '
+                'data-report-id="{}" data-task-id="{}" data-task-type="analysis">'
+                '<button type="button" class="button" disabled>'
+                '<span class="js-task-label">Анализ…</span></button>'
+                '<span class="agromash-admin-action-hint js-task-hint">в очереди</span>'
+                '</div>',
+                obj.pk, task_id,
+            )
+
+        if status == FuelReport.ANALYSIS_STATUS_DONE:
+            hint = "✅ готово"
+            if getattr(obj, "analysis_finished_at", None):
+                hint = f"✅ {timezone.localtime(obj.analysis_finished_at).strftime('%H:%M:%S')}"
+            return format_html(
+                '<div class="agromash-admin-action">'
+                '<button type="submit" class="button" formaction="{}" formmethod="post">Перезапустить</button>'
+                '<span class="agromash-admin-action-hint">{}</span>'
+                '</div>',
+                run_url, hint,
+            )
+
+        if status == FuelReport.ANALYSIS_STATUS_ERROR:
+            return format_html(
+                '<div class="agromash-admin-action">'
+                '<button type="submit" class="button" formaction="{}" formmethod="post">Повторить</button>'
+                '<span class="agromash-admin-action-hint" style="color:#a61e1e;">❌ ошибка</span>'
+                '</div>',
+                run_url,
+            )
+
+        # none / default
         return format_html(
             '<div class="agromash-admin-action">'
             '<button type="submit" class="button" formaction="{}" formmethod="post">Запустить</button>'
@@ -1126,6 +1166,11 @@ class FuelReportAdmin(admin.ModelAdmin):
 
         try:
             async_res = analyze_fuel_report_task.delay(report.id, source="admin")
+            FuelReport.objects.filter(pk=report.id).update(
+                analysis_status=FuelReport.ANALYSIS_STATUS_PENDING,
+                analysis_task_id=str(async_res.id),
+                analysis_error="",
+            )
             self.message_user(
                 request,
                 f"Анализ поставлен в очередь Celery (report_id={report.id}, task_id={async_res.id})",
@@ -1159,11 +1204,13 @@ class FuelReportAdmin(admin.ModelAdmin):
 
         if status == FuelReport.EXPORT_STATUS_PENDING and getattr(obj, "export_xlsx_task_id", None):
             return format_html(
-                '<div class="agromash-admin-action">'
-                '<button type="submit" class="button" formaction="{}" formmethod="post" disabled>Генерация…</button>'
-                '<span class="agromash-admin-action-hint">в очереди</span>'
+                '<div class="agromash-admin-action js-task-poll" '
+                'data-report-id="{}" data-task-id="{}" data-task-type="export">'
+                '<button type="button" class="button" disabled>'
+                '<span class="js-task-label">Генерация…</span></button>'
+                '<span class="agromash-admin-action-hint js-task-hint">в очереди</span>'
                 '</div>',
-                enqueue_url,
+                obj.pk, getattr(obj, "export_xlsx_task_id", ""),
             )
 
         # none/error → предлагаем сгенерировать в фоне

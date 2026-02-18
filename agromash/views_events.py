@@ -404,19 +404,15 @@ class AlarmFilterForm(forms.Form):
 def _filter_alarms(*, user, cleaned: dict, sort: str = 'time', direction: str = 'desc') -> List[Alarm]:
     allowed_monitors = list(_allowed_monitors_qs(user))
     selected_monitors = list(cleaned.get('monitors') or [])
-    is_staff = bool(getattr(user, 'is_staff', False) or getattr(user, 'is_superuser', False))
 
     # Логика:
-    # - если пользователь выбрал мониторы в фильтре — фильтруем по ним всегда (в т.ч. для staff)
-    # - если не выбрал:
-    #     - для staff показываем всё
-    #     - для не-staff показываем только разрешённые
-    if selected_monitors:
-        effective_monitors = selected_monitors
-        force_filter = True
-    else:
-        effective_monitors = allowed_monitors
-        force_filter = not is_staff
+    # - если не выбран ни один монитор — не показываем события
+    # - если выбраны мониторы — фильтруем по ним
+    if not selected_monitors:
+        return []
+
+    effective_monitors = selected_monitors
+    force_filter = True
 
     if force_filter and not effective_monitors:
         return []
@@ -473,10 +469,15 @@ def _filter_alarms(*, user, cleaned: dict, sort: str = 'time', direction: str = 
         a.end_dt_local = timezone.localtime(_alarm_ts_to_aware_utc(a.end_time)) if a.end_time else None
         # PlateMatched: отдельное вычисляемое поле для UI
         a.plate_numbers = _plate_numbers_from_alarm(a) if str(getattr(a, 'topic', '') or '') == 'PlateMatched' else ''
+        # Описание из карточки события
+        case = getattr(a, 'case', None)
+        a.case_description = str(getattr(case, 'description', '') or '') if case else ''
 
     # Python-level sort для вычисляемых/не-БД полей
     if sort == 'plate':
         alarms.sort(key=lambda a: (getattr(a, 'plate_numbers', '') or ''), reverse=reverse)
+    elif sort == 'description':
+        alarms.sort(key=lambda a: (getattr(a, 'case_description', '') or ''), reverse=reverse)
     return alarms
 
 @csrf_exempt
@@ -501,7 +502,7 @@ def events_list(request: HttpRequest):
     # Сортировка таблицы
     sort = str(request.GET.get('sort') or 'time')
     direction = str(request.GET.get('dir') or 'desc').lower()
-    allowed_sorts = {'time', 'monitor', 'topic', 'plate'}
+    allowed_sorts = {'time', 'monitor', 'topic', 'plate', 'description'}
     if sort not in allowed_sorts:
         sort = 'time'
     if direction not in ('asc', 'desc'):
@@ -524,6 +525,7 @@ def events_list(request: HttpRequest):
         'topic': _build_sort_url('topic'),
         'plate': _build_sort_url('plate'),
         'time': _build_sort_url('time'),
+        'description': _build_sort_url('description'),
     }
 
     form = AlarmFilterForm(request.GET or None, allowed_monitors_qs=allowed_monitors, initial=initial)
@@ -599,7 +601,7 @@ def events_table_body(request: HttpRequest):
 
     sort = str(request.GET.get('sort') or 'time')
     direction = str(request.GET.get('dir') or 'desc').lower()
-    allowed_sorts = {'time', 'monitor', 'topic', 'plate'}
+    allowed_sorts = {'time', 'monitor', 'topic', 'plate', 'description'}
     if sort not in allowed_sorts:
         sort = 'time'
     if direction not in ('asc', 'desc'):
@@ -863,7 +865,7 @@ def events_export_xlsx(request: HttpRequest):
     # Сортировка экспорта — повторяем логику сортировки таблицы.
     sort = str(request.GET.get('sort') or 'time')
     direction = str(request.GET.get('dir') or 'desc').lower()
-    allowed_sorts = {'time', 'monitor', 'topic', 'plate'}
+    allowed_sorts = {'time', 'monitor', 'topic', 'plate', 'description'}
     if sort not in allowed_sorts:
         sort = 'time'
     if direction not in ('asc', 'desc'):
