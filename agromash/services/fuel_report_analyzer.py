@@ -17,6 +17,14 @@ from agromash.services.plate_identities import iter_plate_identities, normalize_
 logger = logging.getLogger(__name__)
 
 
+def _normalize_station_token(token: str) -> str:
+    """Костыль: если токен содержит 'АЗС', считаем его равным '64'."""
+    t = str(token or "").strip()
+    if "АЗС" in t or "азс" in t.lower():
+        return "64"
+    return t
+
+
 def _ensure_aware_utc(dt: datetime.datetime) -> datetime.datetime:
     """Привести datetime к aware UTC."""
     if dt is None:
@@ -223,6 +231,7 @@ def analyze_fuel_report(*, report_id: int, window_minutes: int = 10) -> FuelRepo
             continue
 
         token = str(getattr(alarm, "monitor_name_second_token", "") or "").strip()
+        token = _normalize_station_token(token)
         if token and (not station_numbers_set or token in station_numbers_set):
             owners: set[str] = set()
             for _list_info, p in iter_plate_identities(getattr(alarm, "plate_identities", None)):
@@ -274,6 +283,7 @@ def analyze_fuel_report(*, report_id: int, window_minutes: int = 10) -> FuelRepo
         fallback_plate_numbers_map: Dict[str, Dict[str, Any]] = {}
 
         station = str(getattr(op, "station_number", "") or "").strip()
+        station = _normalize_station_token(station)
         pairs = alarms_by_station.get(station) if station else None
         if pairs:
             start_w = op_dt - window
