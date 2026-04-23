@@ -187,17 +187,12 @@ def _identities_to_text(raw) -> str:
 
 
 def _plate_numbers_from_alarm(a: Alarm) -> str:
-    """Список номеров из Alarm.plate_identities (для topic=PlateMatched).
+    """Список номеров из Alarm.
 
-    Исторически `plate_identities` мог быть простым списком/словарём, но в новом формате
-    часто приходит вложенная структура (например: list + plates[]).
-    Здесь аккуратно извлекаем только значения номеров (number/plate/plate_number)
-    из вложенных контейнеров.
+    Источники (в порядке приоритета):
+    1. Alarm.plate_identities (для PlateMatched и других)
+    2. Alarm.data.params.plate.number (для PlateNotMatched)
     """
-
-    raw = getattr(a, 'plate_identities', None)
-    if not raw:
-        return ''
 
     nums: List[str] = []
 
@@ -206,42 +201,46 @@ def _plate_numbers_from_alarm(a: Alarm) -> str:
         if s and s not in nums:
             nums.append(s)
 
-    def _walk(v, *, allow_scalar: bool = False) -> None:
-        if v is None:
-            return
-
-        # Скалярные значения добавляем только на верхнем уровне или если они пришли
-        # как элемент списка (чтобы случайно не захватить фамилии/прочий текст из dict).
-        if isinstance(v, (str, int, float, bool)):
+    # 1. Пробуем plate_identities
+    raw = getattr(a, 'plate_identities', None)
+    if raw:
+        def _walk(v, *, allow_scalar: bool = False) -> None:
+            if v is None:
+                return
+            if isinstance(v, (str, int, float, bool)):
+                if allow_scalar:
+                    _add(v)
+                return
+            if isinstance(v, (list, tuple)):
+                for x in v:
+                    _walk(x, allow_scalar=True)
+                return
+            if isinstance(v, dict):
+                for k in ('number', 'plate', 'plate_number'):
+                    if k in v:
+                        _add(v.get(k))
+                for x in v.values():
+                    _walk(x, allow_scalar=False)
+                return
             if allow_scalar:
                 _add(v)
-            return
 
-        if isinstance(v, (list, tuple)):
-            for x in v:
-                _walk(x, allow_scalar=True)
-            return
+        try:
+            _walk(raw, allow_scalar=True)
+        except Exception:
+            pass
 
-        if isinstance(v, dict):
-            # прямые ключи номера
-            for k in ('number', 'plate', 'plate_number'):
-                if k in v:
-                    _add(v.get(k))
-
-            # рекурсивно обходим вложенные контейнеры
-            for x in v.values():
-                _walk(x, allow_scalar=False)
-            return
-
-        # Fallback для неизвестных типов
-        if allow_scalar:
-            _add(v)
-
-    try:
-        # raw-скаляр допускаем
-        _walk(raw, allow_scalar=True)
-    except Exception:
-        return ''
+    # 2. Если номер не найден и topic=PlateNotMatched, пробуем data.params.plate
+    if not nums and str(getattr(a, 'topic', '') or '') == 'PlateNotMatched':
+        data = getattr(a, 'data', None)
+        if isinstance(data, dict):
+            params = data.get('params')
+            if isinstance(params, dict):
+                plate = params.get('plate')
+                if isinstance(plate, dict):
+                    plate_number = plate.get('number')
+                    if plate_number:
+                        _add(plate_number)
 
     return ', '.join(nums)
 
@@ -420,8 +419,7 @@ def _filter_alarms(*, user, cleaned: dict, sort: str = 'time', direction: str = 
     qs = (
         Alarm.objects.all()
         .select_related('account', 'monitor_ref')
-        .select_related('case')
-        .prefetch_related('case__documents')
+        .prefetch_related('case', 'case__documents')
     )
 
     if force_filter:
@@ -467,8 +465,8 @@ def _filter_alarms(*, user, cleaned: dict, sort: str = 'time', direction: str = 
     for a in alarms:
         a.start_dt_local = timezone.localtime(_alarm_ts_to_aware_utc(a.start_time)) if a.start_time else None
         a.end_dt_local = timezone.localtime(_alarm_ts_to_aware_utc(a.end_time)) if a.end_time else None
-        # PlateMatched: отдельное вычисляемое поле для UI
-        a.plate_numbers = _plate_numbers_from_alarm(a) if str(getattr(a, 'topic', '') or '') == 'PlateMatched' else ''
+        # Номера автомобилей (для всех событий, не только PlateMatched)
+        a.plate_numbers = _plate_numbers_from_alarm(a)
         # Описание из карточки события
         case = getattr(a, 'case', None)
         a.case_description = str(getattr(case, 'description', '') or '') if case else ''
@@ -751,7 +749,7 @@ def _export_columns(request: Optional[HttpRequest] = None) -> Dict[str, Tuple[st
         return "\n".join(rel)
 
     def _plate_numbers(a: Alarm) -> str:
-        return _plate_numbers_from_alarm(a) if str(getattr(a, 'topic', '') or '') == 'PlateMatched' else ''
+        return _plate_numbers_from_alarm(a)
 
     def _case_field(field_name: str) -> str:
         def _get(a: Alarm) -> str:
@@ -943,16 +941,41 @@ def events_export_xlsx(request: HttpRequest):
 @require_GET
 def event_export_xlsx(request: HttpRequest, alarm_pk: int):
     _assert_events_access(request.user)
-    alarm = get_object_or_404(Alarm.objects.select_related('case', 'monitor_ref'), pk=int(alarm_pk))
+    # Загружаем Alarm с select_related (для FK)
+    alarm = get_object_or_404(
+        Alarm.objects.select_related('monitor_ref', 'account'),
+        pk=int(alarm_pk)
+    )
     if not _user_can_access_alarm(user=request.user, alarm=alarm):
         raise Http404('Forbidden')
 
-    # Явно читаем case (на случай отсутствия select_related на reverse O2O)
-    case = AlarmCase.objects.filter(alarm=alarm).first()
-    docs = list(AlarmDocument.objects.filter(case=case).order_by('-uploaded_at')) if case else []
+    # Загружаем AlarmCase и AlarmDocument явными запросами (не через prefetch_related,
+    # т.к. reverse OneToOneField + prefetch на единичном объекте ненадёжен).
+    case = AlarmCase.objects.filter(alarm=alarm).select_related('created_by', 'updated_by').first()
+    docs = list(case.documents.all().order_by('-uploaded_at')) if case else []
+
+    # Привязываем case к alarm, чтобы _export_columns тоже видели данные
+    if case is not None:
+        alarm.case = case
+
+    # DEBUG: выводим в логи информацию о найденных документах
+    logger.info(
+        "event_export_xlsx: alarm_pk=%s alarm_id=%s case_id=%s docs_count=%s files=%s",
+        alarm.pk,
+        getattr(alarm, 'alarm_id', ''),
+        getattr(case, 'pk', None) if case else None,
+        len(docs),
+        [str(getattr(d.file, 'name', '') or '') for d in docs],
+    )
+
+    # Получаем скриншот события
+    snap_bytes = _fetch_alarm_snapshot_bytes(alarm)
 
     try:
         import openpyxl
+        from openpyxl.drawing.image import Image as XLImage
+        from openpyxl.styles import Alignment, Font, PatternFill
+        from openpyxl.utils import get_column_letter
     except Exception as e:
         raise Http404(f'openpyxl is required: {e}')
 
@@ -969,6 +992,16 @@ def event_export_xlsx(request: HttpRequest, alarm_pk: int):
     ws.append([columns[k][1](alarm) for k in keys])
     ws.freeze_panes = 'A2'
 
+    # Стилизация заголовков
+    header_font = Font(bold=True, color='FFFFFF')
+    header_fill = PatternFill(fill_type='solid', fgColor='4472C4')
+    for col_idx in range(1, len(keys) + 1):
+        cell = ws.cell(row=1, column=col_idx)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal='center', vertical='center')
+        ws.column_dimensions[get_column_letter(col_idx)].width = 18
+
     # Дополнительно: удобный для чтения формат key/value (как раньше), чтобы
     # «подробные поля» было проще смотреть в Excel.
     ws_kv = wb.create_sheet('Event (KV)')
@@ -976,7 +1009,41 @@ def event_export_xlsx(request: HttpRequest, alarm_pk: int):
     for k in keys:
         ws_kv.append([columns[k][0], columns[k][1](alarm)])
     ws_kv.freeze_panes = 'A2'
+    ws_kv.column_dimensions['A'].width = 25
+    ws_kv.column_dimensions['B'].width = 60
 
+    # Стилизация KV заголовков
+    for col_idx in range(1, 3):
+        cell = ws_kv.cell(row=1, column=col_idx)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal='center', vertical='center')
+
+    # Лист со скриншотом
+    if snap_bytes:
+        ws_snap = wb.create_sheet('Screenshot')
+        ws_snap.column_dimensions['A'].width = 60
+        try:
+            from PIL import Image as PILImage
+            pil_img = PILImage.open(io.BytesIO(snap_bytes))
+            # Масштабируем до разумного размера
+            max_width = 600
+            if pil_img.width > max_width:
+                ratio = max_width / pil_img.width
+                new_height = int(pil_img.height * ratio)
+                pil_img = pil_img.resize((max_width, new_height), PILImage.LANCZOS)
+            # Сохраняем во временный буфер
+            img_buf = io.BytesIO()
+            pil_img.save(img_buf, format='PNG')
+            img_buf.seek(0)
+            xl_img = XLImage(img_buf)
+            ws_snap.add_image(xl_img, 'A1')
+            ws_snap.row_dimensions[1].height = int(pil_img.height * 0.75)  # точки -> пункты
+        except Exception as e:
+            logger.warning("event_export_xlsx: failed to embed screenshot: %s", e)
+            ws_snap['A1'] = 'Не удалось встроить изображение'
+
+    # Лист с документами
     ws2 = wb.create_sheet('Documents')
     ws2.append(['title', 'file', 'uploaded_at', 'url'])
     for d in docs:
@@ -987,6 +1054,81 @@ def event_export_xlsx(request: HttpRequest, alarm_pk: int):
             d.uploaded_at.strftime('%Y-%m-%d %H:%M:%S') if getattr(d, 'uploaded_at', None) else '',
             url,
         ])
+    ws2.freeze_panes = 'A2'
+    ws2.column_dimensions['A'].width = 30
+    ws2.column_dimensions['B'].width = 40
+    ws2.column_dimensions['C'].width = 20
+    ws2.column_dimensions['D'].width = 50
+
+    # Стилизация заголовков документов
+    for col_idx in range(1, 5):
+        cell = ws2.cell(row=1, column=col_idx)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal='center', vertical='center')
+
+    # Лист с изображениями документов
+    image_docs = []
+    for d in docs:
+        try:
+            # Проверяем, что файл существует
+            if not d.file or not hasattr(d.file, 'path'):
+                logger.warning("event_export_xlsx: doc pk=%s has no file or path", d.pk)
+                continue
+            path = d.file.path
+            import os
+            if not os.path.exists(path):
+                logger.warning("event_export_xlsx: doc pk=%s file path does not exist: %s", d.pk, path)
+                continue
+            ctype, _ = mimetypes.guess_type(path)
+            logger.info("event_export_xlsx: doc pk=%s path=%s ctype=%s", d.pk, path, ctype)
+            if ctype and ctype.startswith('image/'):
+                image_docs.append((d, path))
+        except Exception as e:
+            logger.warning("event_export_xlsx: failed to check doc pk=%s: %s", d.pk, e)
+            continue
+
+    logger.info("event_export_xlsx: found %s image docs out of %s total docs", len(image_docs), len(docs))
+
+    if image_docs:
+        ws_imgs = wb.create_sheet('Document Images')
+        ws_imgs.column_dimensions['A'].width = 80
+        try:
+            from PIL import Image as PILImage
+            current_row = 1
+            for d, path in image_docs:
+                try:
+                    name = str(d.title or '') or str(getattr(d.file, 'name', '') or '').split('/')[-1]
+                    # Добавляем название документа
+                    ws_imgs.cell(row=current_row, column=1, value=name)
+                    ws_imgs.cell(row=current_row, column=1).font = Font(bold=True)
+                    current_row += 1
+                    
+                    # Загружаем и масштабируем изображение
+                    pil_img = PILImage.open(path)
+                    max_width = 600
+                    if pil_img.width > max_width:
+                        ratio = max_width / pil_img.width
+                        new_height = int(pil_img.height * ratio)
+                        pil_img = pil_img.resize((max_width, new_height), PILImage.LANCZOS)
+                    
+                    # Сохраняем во временный буфер
+                    img_buf = io.BytesIO()
+                    pil_img.save(img_buf, format='PNG')
+                    img_buf.seek(0)
+                    xl_img = XLImage(img_buf)
+                    ws_imgs.add_image(xl_img, f'A{current_row}')
+                    
+                    # Устанавливаем высоту строки
+                    ws_imgs.row_dimensions[current_row].height = int(pil_img.height * 0.75)
+                    current_row += 3  # Отступ между изображениями
+                    logger.info("event_export_xlsx: successfully embedded image doc pk=%s", d.pk)
+                except Exception as img_e:
+                    logger.warning("event_export_xlsx: failed to embed image doc pk=%s: %s", d.pk, img_e)
+                    continue
+        except Exception as e:
+            logger.warning("event_export_xlsx: failed to embed document images: %s", e)
+            ws_imgs['A1'] = 'Не удалось встроить изображения документов'
 
     bio = io.BytesIO()
     wb.save(bio)
@@ -1030,13 +1172,23 @@ def _fetch_alarm_snapshot_bytes(alarm: Alarm) -> Optional[bytes]:
 @require_GET
 def event_export_pdf(request: HttpRequest, alarm_pk: int):
     _assert_events_access(request.user)
-    alarm = get_object_or_404(Alarm.objects.select_related('case', 'monitor_ref', 'account'), pk=int(alarm_pk))
+    # Загружаем Alarm с select_related (для FK)
+    alarm = get_object_or_404(
+        Alarm.objects.select_related('monitor_ref', 'account'),
+        pk=int(alarm_pk)
+    )
     if not _user_can_access_alarm(user=request.user, alarm=alarm):
         raise Http404('Forbidden')
 
-    # Явно читаем case и документы (наиболее надежно)
-    case = AlarmCase.objects.filter(alarm=alarm).first()
-    docs = list(AlarmDocument.objects.filter(case=case).order_by('-uploaded_at')) if case else []
+    # Загружаем AlarmCase и AlarmDocument явными запросами (не через prefetch_related,
+    # т.к. reverse OneToOneField + prefetch на единичном объекте ненадёжен).
+    case = AlarmCase.objects.filter(alarm=alarm).select_related('created_by', 'updated_by').first()
+    docs = list(case.documents.all().order_by('-uploaded_at')) if case else []
+
+    # Привязываем case к alarm, чтобы _export_columns тоже видели данные
+    # (getattr(alarm, 'case', None) будет возвращать наш case)
+    if case is not None:
+        alarm.case = case
 
     # DEBUG: выводим в логи информацию о найденных документах
     try:
@@ -1198,10 +1350,20 @@ def event_export_pdf(request: HttpRequest, alarm_pk: int):
 
         # Картинки документов — ниже таблицы
         story.append(Paragraph('Изображения документов (если есть)', style_h))
+        image_count = 0
         for d in docs:
             try:
+                # Проверяем, что файл существует
+                if not d.file or not hasattr(d.file, 'path'):
+                    logger.warning("event_export_pdf: doc pk=%s has no file or path", d.pk)
+                    continue
                 path = d.file.path
+                import os
+                if not os.path.exists(path):
+                    logger.warning("event_export_pdf: doc pk=%s file path does not exist: %s", d.pk, path)
+                    continue
                 ctype, _ = mimetypes.guess_type(path)
+                logger.info("event_export_pdf: doc pk=%s path=%s ctype=%s", d.pk, path, ctype)
                 if ctype and ctype.startswith('image/'):
                     name = str(d.title or '') or str(getattr(d.file, 'name', '') or '').split('/')[-1]
                     story.append(Paragraph(name, style_n))
@@ -1210,8 +1372,11 @@ def event_export_pdf(request: HttpRequest, alarm_pk: int):
                     img.drawHeight = 90 * mm
                     story.append(img)
                     story.append(Spacer(1, 3 * mm))
-            except Exception:
+                    image_count += 1
+            except Exception as e:
+                logger.warning("event_export_pdf: failed to process doc pk=%s: %s", d.pk, e)
                 continue
+        logger.info("event_export_pdf: embedded %s images out of %s docs", image_count, len(docs))
 
     doc.build(story)
     pdf_bytes = bio.getvalue()

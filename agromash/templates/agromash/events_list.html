@@ -8,13 +8,8 @@
 
     <section class="btk-card">
       <form class="btk-form js-alarm-filters" method="get" action="">
-        <div class="btk-grid btk-grid--filters">
-          <div class="btk-field">
-            <label class="btk-label">{{ form.monitors.label }}</label>
-            <div class="btk-monitors">{{ form.monitors }}</div>
-            <div class="btk-hint">Показываются мониторы, назначенные пользователю.</div>
-          </div>
-
+        {# Строка с датами и лимитом #}
+        <div class="btk-filter-row">
           <div class="btk-field">
             <label class="btk-label">{{ form.date_from.label }}</label>
             {{ form.date_from }}
@@ -25,16 +20,23 @@
             {{ form.date_to }}
           </div>
 
-          <div class="btk-field">
+          <div class="btk-field btk-field--limit">
             <label class="btk-label">{{ form.limit.label }}</label>
             {{ form.limit }}
             <div class="btk-hint">Ограничение выдачи/экспорта.</div>
           </div>
+
+          <div class="btk-actions btk-actions--inline">
+            <button class="btk-btn" type="submit">Применить</button>
+            <a class="btk-btn btk-btn--ghost" href="{% url 'events_list' %}">Сбросить</a>
+          </div>
         </div>
 
-        <div class="btk-actions">
-          <button class="btk-btn" type="submit">Применить</button>
-          <a class="btk-btn btk-btn--ghost" href="{% url 'events_list' %}">Сбросить</a>
+        {# Мониторы на всю ширину #}
+        <div class="btk-field btk-field--monitors">
+          <label class="btk-label">{{ form.monitors.label }}</label>
+          <div class="btk-monitors btk-monitors--wide">{{ form.monitors }}</div>
+          <div class="btk-hint">Показываются мониторы, назначенные пользователю.</div>
         </div>
 
         {% if form.errors %}
@@ -48,14 +50,9 @@
         <h2 class="btk-h2">Экспорт</h2>
       </div>
 
-      <form class="btk-form" method="get" action="{% url 'events_export_xlsx' %}">
-        {# Пробрасываем текущие фильтры в экспорт #}
-        {% for v in selected_monitor_pks %}
-          <input type="hidden" name="monitors" value="{{ v }}" />
-        {% endfor %}
-        {% if date_from_raw %}<input type="hidden" name="date_from" value="{{ date_from_raw }}" />{% endif %}
-        {% if date_to_raw %}<input type="hidden" name="date_to" value="{{ date_to_raw }}" />{% endif %}
-        {% if limit_raw %}<input type="hidden" name="limit" value="{{ limit_raw }}" />{% endif %}
+      <form class="btk-form js-export-form" method="get" action="{% url 'events_export_xlsx' %}">
+        {# Скрытые поля для фильтров будут заполнены через JavaScript #}
+        <div id="exportFilters"></div>
 
         <details class="btk-details">
           <summary>Поля Excel</summary>
@@ -70,7 +67,7 @@
         </details>
 
         <div class="btk-actions">
-          <button class="btk-btn" type="submit">Экспорт в Excel</button>
+          <button class="btk-btn btk-btn--xlsx" type="submit">Экспорт в Excel</button>
         </div>
       </form>
     </section>
@@ -197,43 +194,99 @@
     dlgBody.innerHTML = await resp.text();
   });
 
-  // Автосабмит фильтров (GET) при изменении значений в AlarmFilterForm.
-  // Это даёт ререндер страницы без нажатия кнопки «Применить».
+  // Текущее состояние сортировки
+  let currentSort = '{{ sort|default:"time" }}';
+  let currentDir = '{{ dir|default:"desc" }}';
+
+  // Функция обновления таблицы через AJAX
+  const tbodyEl = document.getElementById('alarmsTbody');
+  const refreshBase = tbodyEl ? (tbodyEl.getAttribute('data-refresh-url') || '') : '';
   const filtersForm = document.querySelector('form.js-alarm-filters');
-  if (filtersForm instanceof HTMLFormElement) {
-    let t = null;
-
-    function scheduleFiltersSubmit() {
-      if (t) window.clearTimeout(t);
-      t = window.setTimeout(() => {
-        // requestSubmit сохраняет нативную валидацию (если появится) и событие submit.
-        if (typeof filtersForm.requestSubmit === 'function') {
-          filtersForm.requestSubmit();
-        } else {
-          filtersForm.submit();
-        }
-      }, 350);
-    }
-
-    filtersForm.addEventListener('change', (e) => {
-      const el = e.target;
-      if (!(el instanceof HTMLInputElement || el instanceof HTMLSelectElement || el instanceof HTMLTextAreaElement)) return;
-      if (el.disabled) return;
-      if (el.type === 'submit' || el.type === 'button') return;
-      scheduleFiltersSubmit();
-    });
-
-    // datetime-local может вводиться вручную — подстраховываемся input-событием.
-    filtersForm.addEventListener('input', (e) => {
-      const el = e.target;
-      if (!(el instanceof HTMLInputElement)) return;
-      if (el.disabled) return;
-      if (el.type !== 'datetime-local') return;
-      scheduleFiltersSubmit();
-    });
-  }
 
   let applyTableTextFilters = null;
+
+  async function refreshTableBody() {
+    if (!refreshBase) return;
+    if (document.hidden) return;
+
+    // Собираем параметры из формы фильтров
+    const params = new URLSearchParams();
+
+    // Добавляем сортировку
+    params.set('sort', currentSort);
+    params.set('dir', currentDir);
+
+    // Добавляем фильтры из формы
+    if (filtersForm instanceof HTMLFormElement) {
+      const fd = new FormData(filtersForm);
+      for (const [k, v] of fd.entries()) {
+        params.append(String(k), String(v));
+      }
+    }
+
+    const qs = params.toString();
+    const url = refreshBase + (qs ? `?${qs}` : '');
+
+    const resp = await fetch(url, { headers: { 'X-Requested-With': 'XMLHttpRequest' } });
+    if (!resp.ok) return;
+
+    const html = await resp.text();
+    // Обновляем только строки. События/кнопки в таблице работают через делегирование.
+    tbodyEl.innerHTML = html;
+
+    // Применяем клиентские текстовые фильтры повторно (если включены).
+    if (typeof applyTableTextFilters === 'function') {
+      applyTableTextFilters();
+    }
+  }
+
+  // Обновление URL в браузере без перезагрузки
+  function updateBrowserUrl() {
+    const params = new URLSearchParams();
+    params.set('sort', currentSort);
+    params.set('dir', currentDir);
+
+    if (filtersForm instanceof HTMLFormElement) {
+      const fd = new FormData(filtersForm);
+      for (const [k, v] of fd.entries()) {
+        params.append(String(k), String(v));
+      }
+    }
+
+    const qs = params.toString();
+    const newUrl = window.location.pathname + (qs ? `?${qs}` : '');
+    window.history.replaceState({}, '', newUrl);
+
+    // Также обновляем скрытые поля формы экспорта
+    updateExportFormFields();
+  }
+
+  // Обновление скрытых полей формы экспорта
+  function updateExportFormFields() {
+    const exportFiltersDiv = document.getElementById('exportFilters');
+    if (!exportFiltersDiv) return;
+
+    const params = new URLSearchParams();
+    params.set('sort', currentSort);
+    params.set('dir', currentDir);
+
+    if (filtersForm instanceof HTMLFormElement) {
+      const fd = new FormData(filtersForm);
+      for (const [k, v] of fd.entries()) {
+        params.append(String(k), String(v));
+      }
+    }
+
+    // Генерируем скрытые поля
+    let html = '';
+    for (const [k, v] of params.entries()) {
+      html += `<input type="hidden" name="${k}" value="${v.replace(/"/g, '&quot;')}" />`;
+    }
+    exportFiltersDiv.innerHTML = html;
+  }
+
+  // Инициализация скрытых полей экспорта при загрузке страницы
+  updateExportFormFields();
 
   // Клиентская фильтрация строк таблицы по вхождению текста в колонках.
   // Работает поверх уже отрендеренных данных (до {{ limit_value }} строк).
@@ -305,39 +358,93 @@
     applyTableTextFilters();
   }
 
-  // Автообновление таблицы при появлении новых Alarm: подгружаем только <tbody>.
-  const tbodyEl = document.getElementById('alarmsTbody');
-  if (tbodyEl instanceof HTMLElement) {
-    const refreshBase = tbodyEl.getAttribute('data-refresh-url') || '';
+  // AJAX-обновление при изменении фильтров (без перезагрузки страницы)
+  if (filtersForm instanceof HTMLFormElement) {
+    let filterTimeout = null;
 
-    async function refreshTableBody() {
-      if (!refreshBase) return;
-      if (document.hidden) return;
-
-      // Собираем querystring из текущих фильтров формы, но сохраняем sort/dir из URL.
-      const params = new URLSearchParams(window.location.search || '');
-      if (filtersForm instanceof HTMLFormElement) {
-        for (const k of ['monitors', 'date_from', 'date_to', 'limit']) params.delete(k);
-        const fd = new FormData(filtersForm);
-        for (const [k, v] of fd.entries()) params.append(String(k), String(v));
-      }
-      const qs = params.toString();
-      const url = refreshBase + (qs ? `?${qs}` : '');
-      const resp = await fetch(url, { headers: { 'X-Requested-With': 'XMLHttpRequest' } });
-      if (!resp.ok) return;
-
-      const html = await resp.text();
-      // Обновляем только строки. События/кнопки в таблице работают через делегирование.
-      tbodyEl.innerHTML = html;
-
-      // Применяем клиентские текстовые фильтры повторно (если включены).
-      if (typeof applyTableTextFilters === 'function') {
-        applyTableTextFilters();
-      }
+    function scheduleFilterRefresh() {
+      if (filterTimeout) window.clearTimeout(filterTimeout);
+      filterTimeout = window.setTimeout(() => {
+        refreshTableBody();
+        updateBrowserUrl();
+      }, 350);
     }
 
-    // Интервал обновления можно подобрать по нагрузке/ожиданиям.
-    window.setInterval(refreshTableBody, 10000);
+    filtersForm.addEventListener('change', (e) => {
+      const el = e.target;
+      if (!(el instanceof HTMLInputElement || el instanceof HTMLSelectElement || el instanceof HTMLTextAreaElement)) return;
+      if (el.disabled) return;
+      if (el.type === 'submit' || el.type === 'button') return;
+      scheduleFilterRefresh();
+    });
+
+    // datetime-local может вводиться вручную — подстраховываемся input-событием.
+    filtersForm.addEventListener('input', (e) => {
+      const el = e.target;
+      if (!(el instanceof HTMLInputElement)) return;
+      if (el.disabled) return;
+      if (el.type !== 'datetime-local') return;
+      scheduleFilterRefresh();
+    });
+
+    // Перехват submit формы — делаем AJAX вместо перезагрузки
+    filtersForm.addEventListener('submit', (e) => {
+      e.preventDefault();
+      refreshTableBody();
+      updateBrowserUrl();
+    });
+  }
+
+  // AJAX-обновление при клике на сортировку (без перезагрузки страницы)
+  document.addEventListener('click', (e) => {
+    const link = e.target.closest('.btk-thlink');
+    if (!link) return;
+
+    e.preventDefault();
+
+    // Извлекаем новый sort из href ссылки
+    const href = link.getAttribute('href') || '';
+    const params = new URLSearchParams(href.replace('?', ''));
+
+    const newSort = params.get('sort') || 'time';
+    const newDir = params.get('dir') || 'desc';
+
+    // Обновляем текущее состояние
+    currentSort = newSort;
+    currentDir = newDir;
+
+    // Обновляем индикаторы сортировки в заголовках
+    const thead = table.querySelector('thead');
+    if (thead) {
+      thead.querySelectorAll('.btk-thlink').forEach((thLink) => {
+        const th = thLink.closest('th');
+        if (!th) return;
+
+        // Удаляем старые индикаторы
+        let text = thLink.textContent || '';
+        text = text.replace(/\s*[▲▼]\s*$/, '').trim();
+        thLink.textContent = text;
+
+        // Добавляем индикатор для активного столбца
+        const linkHref = thLink.getAttribute('href') || '';
+        const linkParams = new URLSearchParams(linkHref.replace('?', ''));
+        const linkSort = linkParams.get('sort');
+
+        if (linkSort === currentSort) {
+          thLink.textContent = text + (currentDir === 'asc' ? ' ▲' : ' ▼');
+        }
+      });
+    }
+
+    refreshTableBody();
+    updateBrowserUrl();
+  });
+
+  // Автообновление таблицы при появлении новых Alarm: подгружаем только <tbody>.
+  if (tbodyEl instanceof HTMLElement && refreshBase) {
+    window.setInterval(() => {
+      refreshTableBody();
+    }, 10000);
   }
 </script>
 {% endblock %}

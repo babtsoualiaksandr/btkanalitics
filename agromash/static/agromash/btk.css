@@ -109,16 +109,66 @@ code {
   gap: 12px;
 }
 
-/* Сетка фильтров на /agromash/events */
-.btk-grid--filters {
-  grid-template-columns: 2fr 1fr 1fr 0.6fr;
-  align-items: start;
+/* Строка фильтров даты и лимита на /agromash/events */
+.btk-filter-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto auto;
+  gap: 12px;
+  align-items: end;
+}
+
+.btk-filter-row > .btk-field .btk-hint {
+  position: absolute;
+  bottom: -16px;
+  left: 0;
+  white-space: nowrap;
+}
+
+.btk-filter-row > .btk-field--limit {
+  position: relative;
+  min-width: 100px;
+}
+
+.btk-actions--inline {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+  padding-bottom: 1px;
+}
+
+/* Мониторы на всю ширину */
+.btk-field--monitors {
+  margin-top: 4px;
+  padding-top: 12px;
+  border-top: 1px solid var(--btk-border);
+}
+
+.btk-monitors--wide ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  padding: 10px 14px;
+  max-height: none;
 }
 
 @media (max-width: 900px) {
   .btk-header__inner { grid-template-columns: 1fr; }
-  .btk-grid,
-  .btk-grid--filters { grid-template-columns: 1fr; }
+  .btk-filter-row {
+    grid-template-columns: 1fr 1fr;
+  }
+  .btk-filter-row > .btk-actions--inline {
+    grid-column: 1 / -1;
+  }
+  .btk-monitors--wide ul {
+    flex-direction: column;
+    gap: 6px;
+  }
+}
+
+@media (max-width: 540px) {
+  .btk-filter-row {
+    grid-template-columns: 1fr;
+  }
 }
 
 .btk-field { display: grid; gap: 6px; }
@@ -187,27 +237,79 @@ textarea.btk-textarea { resize: vertical; }
   border: 1px solid var(--btk-blue-2);
   background: var(--btk-blue);
   color: #fff;
-  padding: 9px 12px;
-  border-radius: 10px;
+  padding: 9px 20px;
+  border-radius: 50px;
   cursor: pointer;
   font-weight: 600;
+  font-size: 14px;
+  line-height: 1.4;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  transition: background 0.2s ease, box-shadow 0.2s ease, transform 0.15s ease, border-color 0.2s ease;
 }
-.btk-btn:hover { background: var(--btk-blue-2); }
+.btk-btn:hover {
+  background: var(--btk-blue-2);
+  box-shadow: 0 4px 12px rgba(0, 114, 206, 0.3);
+  transform: translateY(-1px);
+}
+.btk-btn:active {
+  transform: translateY(0);
+  box-shadow: 0 1px 4px rgba(0, 114, 206, 0.2);
+}
 
 .btk-btn--ghost {
   background: transparent;
   color: var(--btk-blue-2);
   border-color: var(--btk-border);
 }
-.btk-btn--ghost:hover { background: rgba(0, 114, 206, 0.08); }
+.btk-btn--ghost:hover {
+  background: rgba(0, 114, 206, 0.08);
+  border-color: var(--btk-blue);
+  box-shadow: 0 4px 12px rgba(0, 114, 206, 0.12);
+  transform: translateY(-1px);
+}
+.btk-btn--ghost:active {
+  transform: translateY(0);
+  box-shadow: none;
+}
 
 .btk-btn--danger {
   background: var(--btk-danger);
   border-color: var(--btk-danger);
 }
-.btk-btn--danger:hover { filter: brightness(0.92); }
+.btk-btn--danger:hover {
+  filter: brightness(0.92);
+  box-shadow: 0 4px 12px rgba(183, 28, 28, 0.3);
+}
+.btk-btn--danger:active {
+  transform: translateY(0);
+  box-shadow: 0 1px 4px rgba(183, 28, 28, 0.2);
+}
 
-.btk-btn--small { padding: 6px 9px; border-radius: 9px; font-size: 12px; }
+.btk-btn--small { padding: 5px 14px; border-radius: 50px; font-size: 12px; }
+
+/* Кнопка экспорта в Excel (зелёная) */
+.btk-btn--xlsx {
+  background: #217346;
+  border-color: #1a5c38;
+}
+.btk-btn--xlsx:hover {
+  background: #1a5c38;
+  box-shadow: 0 4px 12px rgba(33, 115, 70, 0.35);
+}
+
+/* Кнопка экспорта в PDF (красная) */
+.btk-btn--pdf {
+  background: #d93025;
+  border-color: #b3261e;
+}
+.btk-btn--pdf:hover {
+  background: #b3261e;
+  box-shadow: 0 4px 12px rgba(217, 48, 37, 0.35);
+}
 
 .btk-alert { padding: 10px 12px; border-radius: 10px; border: 1px solid var(--btk-border); }
 .btk-alert--danger { border-color: rgba(183, 28, 28, 0.35); background: rgba(183, 28, 28, 0.06); color: #6a1010; }
@@ -270,6 +372,12 @@ textarea.btk-textarea { resize: vertical; }
 
 .btk-col-snap { width: 140px; }
 .btk-col-actions { width: 240px; }
+.btk-case-desc {
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .btk-snap {
   width: 120px;
   height: 80px;

@@ -14,7 +14,7 @@
       <div class="btk-muted">event_id: <code>{{ a.event_id }}</code></div>
     </td>
     <td>
-      {% if a.topic == 'PlateMatched' %}
+      {% if a.plate_numbers %}
         <div class="btk-strong">{{ a.plate_numbers }}</div>
       {% else %}
         <div class="btk-muted">-</div>
@@ -34,8 +34,8 @@
         data-url="{% url 'alarm_case_modal' a.pk %}">
         Документы
       </button>
-      <a class="btk-btn btk-btn--small btk-btn--ghost" href="{% url 'event_export_xlsx' a.pk %}">Xlsx</a>
-      <a class="btk-btn btk-btn--small btk-btn--ghost" href="{% url 'event_export_pdf' a.pk %}">PDF</a>
+      <a class="btk-btn btk-btn--small btk-btn--xlsx" href="{% url 'event_export_xlsx' a.pk %}">Xlsx</a>
+      <a class="btk-btn btk-btn--small btk-btn--pdf" href="{% url 'event_export_pdf' a.pk %}">PDF</a>
     </td>
   </tr>
 {% empty %}
