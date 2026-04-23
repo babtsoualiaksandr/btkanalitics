@@ -222,6 +222,32 @@ def _collect_system_status_context() -> dict:
         ReportRunLog.objects.select_related("subscriber", "subscription").all()[:100]
     )
 
+    # Активные задачи анализа FuelReport
+    from agromash.models import FuelReport
+    from agromash.tasks import is_task_active
+
+    analyzing_reports = []
+    for fr in FuelReport.objects.filter(
+        analysis_status=FuelReport.ANALYSIS_STATUS_PENDING
+    ).order_by('-id')[:20]:
+        task_active = False
+        task_id = getattr(fr, "analysis_task_id", "") or ""
+        if task_id:
+            try:
+                task_active = is_task_active(task_id)
+            except Exception:
+                pass
+        analyzing_reports.append({
+            'id': fr.id,
+            'contract': fr.contract_number or '',
+            'organization': fr.organization_name or '',
+            'period_start': fr.period_start,
+            'period_end': fr.period_end,
+            'task_id': task_id,
+            'task_active': task_active,
+            'created_at': fr.created_at,
+        })
+
     return {
         "monitors": monitors_view,
         "unit_states": unit_states,
@@ -230,6 +256,7 @@ def _collect_system_status_context() -> dict:
         "running_parsers": running_parsers,
         "telegram_logs": telegram_logs,
         "report_logs": report_logs,
+        "analyzing_reports": analyzing_reports,
     }
 
 

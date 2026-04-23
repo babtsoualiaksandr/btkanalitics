@@ -398,4 +398,45 @@
       </table>
     </div>
   </div>
+
+  <h2>Анализ FuelReport (активные)</h2>
+  <div class="module">
+    <div class="muted">Показаны задачи анализа со статусом "pending". Если задача зависла — task_active будет false.</div>
+    <div class="tablebox">
+      <table>
+        <thead>
+          <tr>
+            <th>Report ID</th>
+            <th>Договор</th>
+            <th>Организация</th>
+            <th>Период</th>
+            <th>Task ID</th>
+            <th>Статус</th>
+            <th>Создан</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in analyzing_reports %}
+            <tr>
+              <td><a href="/admin/agromash/fuelreport/{{ r.id }}/change/">{{ r.id }}</a></td>
+              <td>{{ r.contract|default:"-" }}</td>
+              <td>{{ r.organization|default:"-" }}</td>
+              <td>{{ r.period_start|default:"-" }}..{{ r.period_end|default:"-" }}</td>
+              <td><code>{{ r.task_id|default:"-" }}</code></td>
+              <td>
+                {% if r.task_active %}
+                  <span class="badge active">🔄 выполняется</span>
+                {% else %}
+                  <span class="badge stale">⏳ в очереди / зависла</span>
+                {% endif %}
+              </td>
+              <td>{{ r.created_at|date:"Y-m-d H:i:s" }}</td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="7">Нет активных задач анализа</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
 {% endblock %}

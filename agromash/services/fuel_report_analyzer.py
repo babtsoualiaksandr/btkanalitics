@@ -95,6 +95,8 @@ def analyze_fuel_report(*, report_id: int, window_minutes: int = 10) -> FuelRepo
       - analyzed_at (datetime)
     """
 
+    logger.info("analyze_fuel_report START report_id=%s window_minutes=%s", report_id, window_minutes)
+
     report = FuelReport.objects.filter(pk=report_id).only("id", "period_start", "period_end").first()
     if not report:
         logger.warning("analyze_fuel_report: report not found report_id=%s", report_id)
@@ -110,6 +112,7 @@ def analyze_fuel_report(*, report_id: int, window_minutes: int = 10) -> FuelRepo
     ops_qs = FuelOperation.objects.filter(report_id=report_id)
     ops_total = ops_qs.count()
     if ops_total == 0:
+        logger.info("analyze_fuel_report: no operations report_id=%s", report_id)
         return FuelReportAnalyzeSummary(
             report_id=report_id,
             operations_total=0,
@@ -152,6 +155,11 @@ def analyze_fuel_report(*, report_id: int, window_minutes: int = 10) -> FuelRepo
     start_ms = start_sec * 1000
     end_ms = end_sec * 1000
 
+    logger.info(
+        "analyze_fuel_report step=time_range report_id=%s start=%s end=%s",
+        report_id, start_dt.isoformat(), end_dt.isoformat(),
+    )
+
     # 2) карточки из FuelOperation -> PlateIdentity
     cards: List[str] = []
     for v in ops_qs.values_list("card_number", flat=True).distinct().iterator():
@@ -159,6 +167,8 @@ def analyze_fuel_report(*, report_id: int, window_minutes: int = 10) -> FuelRepo
         if s:
             cards.append(s)
     cards = list(dict.fromkeys(cards))
+
+    logger.info("analyze_fuel_report step=cards_loaded report_id=%s cards=%s", report_id, len(cards))
 
     pi_by_card: Dict[str, PlateIdentity] = {}
     if cards:
@@ -171,6 +181,11 @@ def analyze_fuel_report(*, report_id: int, window_minutes: int = 10) -> FuelRepo
             if key and key not in pi_by_card:
                 pi_by_card[key] = pi
 
+    logger.info(
+        "analyze_fuel_report step=plate_identities_loaded report_id=%s matched=%s",
+        report_id, len(pi_by_card),
+    )
+
     # 3) список station_number из операций (для потенциальной оптимизации/статистики)
     station_numbers: List[str] = []
     for v in ops_qs.values_list("station_number", flat=True).distinct().iterator():
@@ -179,6 +194,8 @@ def analyze_fuel_report(*, report_id: int, window_minutes: int = 10) -> FuelRepo
             station_numbers.append(s)
     station_numbers = list(dict.fromkeys(station_numbers))
     station_numbers_set = set(station_numbers)
+
+    logger.info("analyze_fuel_report step=stations_loaded report_id=%s stations=%s", report_id, len(station_numbers))
 
     # 4) кандидатные Alarm за общий диапазон, собираем индекс monitor_name_second_token -> alarms
     alarms_q = (
@@ -213,6 +230,11 @@ def analyze_fuel_report(*, report_id: int, window_minutes: int = 10) -> FuelRepo
                 if om:
                     owners.add(om)
             alarms_by_station[token].append((alarm, alarm_dt, owners))
+
+    logger.info(
+        "analyze_fuel_report step=alarms_loaded report_id=%s alarms_candidates=%s stations_with_alarms=%s",
+        report_id, alarms_candidates, len(alarms_by_station),
+    )
 
     # Индексы по времени внутри каждой станции для быстрого поиска окна.
     alarms_by_station_dts: Dict[str, List[datetime.datetime]] = {}
@@ -321,6 +343,10 @@ def analyze_fuel_report(*, report_id: int, window_minutes: int = 10) -> FuelRepo
                 batch_size=1000,
             )
             updated += len(batch)
+            logger.info(
+                "analyze_fuel_report progress report_id=%s updated=%s/%s",
+                report_id, updated, ops_total,
+            )
             batch.clear()
 
     if batch:
@@ -336,6 +362,11 @@ def analyze_fuel_report(*, report_id: int, window_minutes: int = 10) -> FuelRepo
             batch_size=1000,
         )
         updated += len(batch)
+
+    logger.info(
+        "analyze_fuel_report DONE report_id=%s total=%s updated=%s with_pi=%s with_alarms=%s alarms_candidates=%s",
+        report_id, ops_total, updated, with_pi, with_alarms, alarms_candidates,
+    )
 
     return FuelReportAnalyzeSummary(
         report_id=report_id,
