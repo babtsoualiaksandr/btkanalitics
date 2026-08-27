@@ -35,12 +35,6 @@ def _assert_events_access(user) -> None:
 
 from .va_api_client import VAApiClient
 
-def start_parsing(request):
-    if request.method == 'POST':
-        pass
-        return HttpResponse('Parsing started')
-    return render(request, 'agromash/start_parsing.html')
-
 
 def _to_aware_dt(value: int):
     """BigInteger epoch (sec or ms) -> aware datetime (UTC)."""
