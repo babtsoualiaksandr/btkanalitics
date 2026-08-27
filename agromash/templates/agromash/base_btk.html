@@ -7,6 +7,7 @@
   <title>{% block title %}BTK Analitics{% endblock %}</title>
   <link rel="icon" href="{% static 'agromash/favicon.svg' %}" />
   <link rel="stylesheet" href="{% static 'agromash/btk.css' %}?v=20260219d" />
+  {% block extra_head %}{% endblock %}
 </head>
 <body>
   <header class="btk-header">

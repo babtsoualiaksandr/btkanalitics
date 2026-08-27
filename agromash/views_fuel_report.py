@@ -36,6 +36,11 @@ class FuelReportImportForm(forms.Form):
 @require_GET
 def fuel_report_list(request):
     reports = FuelReport.objects.all().defer("export_xlsx_content")
+    stats = {
+        "total": reports.count(),
+        "analysis_pending": reports.filter(analysis_status=FuelReport.ANALYSIS_STATUS_PENDING).count(),
+        "export_ready": reports.filter(export_xlsx_status=FuelReport.EXPORT_STATUS_READY).count(),
+    }
     xlsx_columns = [
         {
             "key": str(c.get("key")),
@@ -47,6 +52,7 @@ def fuel_report_list(request):
     ]
     ctx = {
         "reports": reports,
+        "stats": stats,
         "import_form": FuelReportImportForm(),
         "telegram_subscribers": TelegramSubscriber.objects.all().order_by("username", "chat_id"),
         "xlsx_columns": xlsx_columns,

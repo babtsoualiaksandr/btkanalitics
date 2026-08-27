@@ -2,18 +2,292 @@
 
 {% block title %}Отчёты о заправках — BTK Analitics{% endblock %}
 
+{% block extra_head %}
+<style>
+  .fr-page {
+    --fr-navy: #0a1a2b;
+    --fr-navy-2: #123055;
+    --fr-navy-3: #1d4372;
+    --fr-amber: #ff9d2f;
+    --fr-amber-2: #ffc178;
+    --fr-teal: #33d1c8;
+  }
+
+  /* ---------- Hero ---------- */
+  .fr-hero {
+    position: relative;
+    overflow: hidden;
+    border-radius: 24px;
+    padding: 36px 32px 28px;
+    margin: 4px 0 18px;
+    color: #fff;
+    background:
+      radial-gradient(900px 320px at 12% -20%, rgba(255, 157, 47, 0.35), transparent 60%),
+      radial-gradient(700px 280px at 92% 0%, rgba(51, 209, 200, 0.28), transparent 55%),
+      linear-gradient(165deg, var(--fr-navy) 0%, var(--fr-navy-2) 55%, var(--fr-navy-3) 100%);
+    box-shadow: 0 24px 60px -28px rgba(10, 26, 43, 0.65);
+  }
+
+  .fr-hero__glow {
+    position: absolute;
+    inset: 0;
+    background-image:
+      repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.5) 0 26px, transparent 26px 58px);
+    background-size: 58px 5px;
+    background-repeat: no-repeat;
+    background-position: -20px calc(100% - 22px);
+    width: 60%;
+    opacity: 0.28;
+    transform: skewX(-18deg);
+    pointer-events: none;
+  }
+
+  .fr-hero__pump {
+    position: absolute;
+    right: 26px;
+    bottom: -6px;
+    width: 108px;
+    height: auto;
+    opacity: 0.22;
+    color: var(--fr-amber-2);
+    pointer-events: none;
+  }
+
+  .fr-hero__body { position: relative; z-index: 1; }
+
+  .fr-hero__eyebrow {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    font-size: 11px;
+    font-weight: 800;
+    color: var(--fr-amber-2);
+  }
+
+  .fr-hero__title {
+    font-size: 30px;
+    font-weight: 800;
+    letter-spacing: -0.01em;
+    margin: 8px 0 8px;
+    text-wrap: balance;
+  }
+
+  .fr-hero__subtitle {
+    max-width: 640px;
+    color: rgba(255, 255, 255, 0.72);
+    font-size: 14px;
+    line-height: 1.5;
+  }
+
+  .fr-hero__stats {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 28px;
+    margin-top: 26px;
+  }
+
+  .fr-stat__value {
+    font-size: 26px;
+    font-weight: 800;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .fr-stat__label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.09em;
+    color: rgba(255, 255, 255, 0.6);
+    margin-top: 2px;
+  }
+
+  @media (max-width: 640px) {
+    .fr-hero { padding: 26px 20px 22px; border-radius: 18px; }
+    .fr-hero__title { font-size: 24px; }
+    .fr-hero__pump { display: none; }
+  }
+
+  /* ---------- Cards ---------- */
+  .fr-page .btk-card {
+    border-radius: 18px;
+    border-color: rgba(10, 26, 43, 0.08);
+    box-shadow: 0 14px 34px -24px rgba(10, 26, 43, 0.35);
+  }
+
+  .fr-page .btk-card__header { margin-bottom: 14px; }
+
+  .fr-page .btk-h2 {
+    font-weight: 800;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .fr-page .btk-h2__icon {
+    display: inline-flex;
+    width: 30px;
+    height: 30px;
+    border-radius: 9px;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(135deg, rgba(0, 114, 206, 0.14), rgba(51, 209, 200, 0.14));
+    color: var(--btk-blue-2);
+    flex: none;
+  }
+
+  /* ---------- File input (upload form) ---------- */
+  .fr-page .fr-file {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    padding: 10px 12px;
+    border: 1.5px dashed var(--btk-border);
+    border-radius: 14px;
+    background: linear-gradient(180deg, #fbfcfe, #f5f8fc);
+    transition: border-color 0.15s ease, background 0.15s ease;
+  }
+  .fr-page .fr-file:focus-within,
+  .fr-page .fr-file:hover {
+    border-color: rgba(0, 114, 206, 0.5);
+    background: #fff;
+  }
+  .fr-page .fr-file input[type="file"] {
+    font-size: 13px;
+    color: var(--btk-muted);
+  }
+  .fr-page .fr-file input[type="file"]::file-selector-button {
+    appearance: none;
+    border: none;
+    border-radius: 50px;
+    padding: 8px 16px;
+    margin-right: 10px;
+    font-weight: 700;
+    font-size: 13px;
+    color: #fff;
+    background: linear-gradient(135deg, var(--btk-blue), var(--fr-navy-3));
+    cursor: pointer;
+    transition: filter 0.15s ease;
+  }
+  .fr-page .fr-file input[type="file"]::file-selector-button:hover { filter: brightness(1.08); }
+
+  /* ---------- Buttons: gradient / glow treatment for this page ---------- */
+  .fr-page .btk-btn {
+    border: none;
+    background: linear-gradient(135deg, var(--btk-blue), var(--fr-navy-3));
+    box-shadow: 0 10px 22px -10px rgba(0, 114, 206, 0.6);
+  }
+  .fr-page .btk-btn:hover {
+    background: linear-gradient(135deg, var(--btk-blue-2), var(--fr-navy-2));
+    box-shadow: 0 12px 26px -8px rgba(0, 114, 206, 0.7);
+  }
+  .fr-page .btk-btn--ghost {
+    background: rgba(0, 114, 206, 0.06);
+    border: 1px solid rgba(0, 114, 206, 0.22);
+    color: var(--btk-blue-2);
+    box-shadow: none;
+  }
+  .fr-page .btk-btn--ghost:hover {
+    background: rgba(0, 114, 206, 0.12);
+    box-shadow: 0 8px 18px -10px rgba(0, 114, 206, 0.35);
+  }
+  .fr-page .btk-btn--danger {
+    background: linear-gradient(135deg, #e0453a, #a01515);
+    box-shadow: 0 10px 22px -10px rgba(160, 21, 21, 0.55);
+  }
+  .fr-page .btk-btn--danger:hover { background: linear-gradient(135deg, #c8362c, #8c1212); }
+  .fr-page .btk-btn--xlsx {
+    background: linear-gradient(135deg, #24a35d, #12703c);
+    box-shadow: 0 10px 22px -10px rgba(18, 112, 60, 0.55);
+  }
+  .fr-page .btk-btn--xlsx:hover { background: linear-gradient(135deg, #1f8f51, #0f5f33); }
+
+  .fr-icon {
+    width: 14px;
+    height: 14px;
+    flex: none;
+    vertical-align: -2px;
+  }
+
+  /* ---------- Parser liveness status chips ---------- */
+  .fr-page .fr-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 10px;
+    border-radius: 50px;
+    font-size: 12px;
+    font-weight: 700;
+  }
+  .fr-page .fr-status::before {
+    content: '';
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: currentColor;
+  }
+  .fr-page .fr-status--ok { color: #157a3d; background: rgba(21, 122, 61, 0.1); }
+  .fr-page .fr-status--warn { color: #a15c00; background: rgba(161, 92, 0, 0.1); }
+  .fr-page .fr-status--bad { color: var(--btk-danger); background: rgba(183, 28, 28, 0.08); }
+
+  .fr-page tr.fr-row--mismatch { background: rgba(183, 28, 28, 0.05); }
+</style>
+{% endblock %}
+
 {% block content %}
-<div class="btk-container">
+<div class="btk-container fr-page">
+
+  <section class="fr-hero">
+    <div class="fr-hero__glow" aria-hidden="true"></div>
+    <svg class="fr-hero__pump" viewBox="0 0 64 96" fill="none" aria-hidden="true">
+      <rect x="6" y="18" width="34" height="66" rx="4" fill="currentColor" opacity="0.9"/>
+      <rect x="12" y="26" width="22" height="26" rx="2" fill="#0a1a2b" opacity="0.55"/>
+      <rect x="2" y="10" width="44" height="8" rx="3" fill="currentColor"/>
+      <path d="M40 34h8a6 6 0 0 1 6 6v30a5 5 0 0 1-10 0V54a4 4 0 0 0-4-4" stroke="currentColor" stroke-width="4" stroke-linecap="round"/>
+      <circle cx="44" cy="72" r="3" fill="currentColor"/>
+    </svg>
+    <div class="fr-hero__body">
+      <span class="fr-hero__eyebrow">⛽ Топливная аналитика</span>
+      <h1 class="fr-hero__title">Отчёты о заправках</h1>
+      <p class="fr-hero__subtitle">
+        Загрузите пооперационный отчёт из системы АЗС, запустите анализ, скачайте
+        готовый XLSX или отправьте его подписчикам — всё в одном месте.
+      </p>
+      <div class="fr-hero__stats">
+        <div class="fr-stat">
+          <div class="fr-stat__value">{{ stats.total }}</div>
+          <div class="fr-stat__label">Всего отчётов</div>
+        </div>
+        <div class="fr-stat">
+          <div class="fr-stat__value">{{ stats.analysis_pending }}</div>
+          <div class="fr-stat__label">В очереди на анализ</div>
+        </div>
+        <div class="fr-stat">
+          <div class="fr-stat__value">{{ stats.export_ready }}</div>
+          <div class="fr-stat__label">Готовых XLSX</div>
+        </div>
+        <div class="fr-stat">
+          <div class="fr-stat__value">{{ running_parsers|length }}</div>
+          <div class="fr-stat__label">Активных парсеров</div>
+        </div>
+      </div>
+    </div>
+  </section>
 
   <section class="btk-card">
     <div class="btk-card__header">
-      <h2 class="btk-h2">Загрузить новый отчёт</h2>
+      <h2 class="btk-h2">
+        <span class="btk-h2__icon">
+          <svg class="fr-icon" style="width:16px;height:16px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 8 5-5 5 5"/><path d="M5 21h14a2 2 0 0 0 2-2v-5a2 2 0 0 0-2-2h-2"/></svg>
+        </span>
+        Загрузить новый отчёт
+      </h2>
     </div>
     <form class="btk-form" method="post" enctype="multipart/form-data" action="{% url 'fuel_report_upload' %}">
       {% csrf_token %}
       <div class="btk-field">
         <label class="btk-label" for="id_xlsx_file">XLSX файл</label>
-        {{ import_form.xlsx_file }}
+        <div class="fr-file">{{ import_form.xlsx_file }}</div>
         <div class="btk-hint">Пооперационный отчёт по заправкам (как выгружается из системы АЗС).</div>
       </div>
       <div class="btk-field">
@@ -26,14 +300,22 @@
         <div class="btk-hint">Период необязателен — если не указан, анализ возьмёт границы по датам самих операций.</div>
       </div>
       <div class="btk-actions">
-        <button class="btk-btn" type="submit">Загрузить</button>
+        <button class="btk-btn" type="submit">
+          <svg class="fr-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 8 5-5 5 5"/><path d="M20 17.5v1a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 18.5v-1"/></svg>
+          Загрузить
+        </button>
       </div>
     </form>
   </section>
 
   <section class="btk-card">
     <div class="btk-card__header">
-      <h2 class="btk-h2">История отчётов</h2>
+      <h2 class="btk-h2">
+        <span class="btk-h2__icon">
+          <svg class="fr-icon" style="width:16px;height:16px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18"/><path d="M8 4v3"/><path d="M16 4v3"/></svg>
+        </span>
+        История отчётов
+      </h2>
     </div>
     <div class="btk-tablewrap">
       <table class="btk-table">
@@ -76,7 +358,10 @@
                   <form method="post" action="{% url 'fuel_report_analyze' r.id %}">
                     {% csrf_token %}
                     <button class="btk-btn btk-btn--small btk-btn--ghost" type="submit"
-                      onclick="return confirm('Перезапустить анализ? Текущий результат будет заменён.');">Перезапустить</button>
+                      onclick="return confirm('Перезапустить анализ? Текущий результат будет заменён.');">
+                      <svg class="fr-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.6-6.36"/><path d="M21 3v6h-6"/></svg>
+                      Перезапустить
+                    </button>
                   </form>
                   <div class="btk-hint">✅ {% if r.analysis_finished_at %}{{ r.analysis_finished_at|date:"H:i:s" }}{% else %}готово{% endif %}</div>
                 {% elif r.analysis_status == 'error' %}
@@ -89,7 +374,10 @@
                 {% else %}
                   <form method="post" action="{% url 'fuel_report_analyze' r.id %}">
                     {% csrf_token %}
-                    <button class="btk-btn btk-btn--small" type="submit">Запустить</button>
+                    <button class="btk-btn btk-btn--small" type="submit">
+                      <svg class="fr-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+                      Запустить
+                    </button>
                   </form>
                 {% endif %}
               </td>
@@ -97,7 +385,10 @@
               {# --- Отчёт (экспорт XLSX) --- #}
               <td class="btk-col-actions">
                 {% if r.export_xlsx_status == 'ready' %}
-                  <a class="btk-btn btk-btn--small btk-btn--xlsx" href="{% url 'fuel_report_download' r.id %}">Скачать XLSX</a>
+                  <a class="btk-btn btk-btn--small btk-btn--xlsx" href="{% url 'fuel_report_download' r.id %}">
+                    <svg class="fr-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
+                    Скачать XLSX
+                  </a>
                   <button class="btk-btn btk-btn--small btk-btn--ghost js-fuelreport-enqueue" type="button" data-report-id="{{ r.id }}">Пересоздать…</button>
                   <div class="btk-hint">готово</div>
                 {% elif r.export_xlsx_status == 'pending' %}
@@ -115,7 +406,10 @@
 
               {# --- Отправка --- #}
               <td class="btk-col-actions">
-                <button class="btk-btn btk-btn--small btk-btn--ghost js-fuelreport-send" type="button" data-report-id="{{ r.id }}">Отправить…</button>
+                <button class="btk-btn btk-btn--small btk-btn--ghost js-fuelreport-send" type="button" data-report-id="{{ r.id }}">
+                  <svg class="fr-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>
+                  Отправить…
+                </button>
               </td>
             </tr>
           {% empty %}
@@ -128,7 +422,12 @@
 
   <section class="btk-card">
     <div class="btk-card__header">
-      <h2 class="btk-h2">Живучесть парсеров</h2>
+      <h2 class="btk-h2">
+        <span class="btk-h2__icon">
+          <svg class="fr-icon" style="width:16px;height:16px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+        </span>
+        Живучесть парсеров
+      </h2>
       <div class="btk-hint"><a class="btk-thlink" href="{% url 'admin_system_status' %}">Подробная диагностика →</a></div>
     </div>
     <div class="btk-tablewrap">
@@ -144,10 +443,18 @@
         </thead>
         <tbody>
           {% for a in running_parsers %}
-            <tr {% if a.worker_mismatch %}style="background:#fdecea;"{% endif %}>
+            <tr class="{% if a.worker_mismatch %}fr-row--mismatch{% endif %}">
               <td>{{ a.name }}</td>
               <td>{{ a.organization }}</td>
-              <td>{{ a.parser_status }}</td>
+              <td>
+                {% if a.worker_mismatch %}
+                  <span class="fr-status fr-status--bad">{{ a.parser_status }}</span>
+                {% elif a.parser_status == 'running' %}
+                  <span class="fr-status fr-status--ok">{{ a.parser_status }}</span>
+                {% else %}
+                  <span class="fr-status fr-status--warn">{{ a.parser_status }}</span>
+                {% endif %}
+              </td>
               <td><code>{{ a.current_worker }}</code>{% if a.worker_mismatch %} ⚠️{% endif %}</td>
               <td>{{ a.parser_heartbeat_at|date:"Y-m-d H:i:s" }}</td>
             </tr>
