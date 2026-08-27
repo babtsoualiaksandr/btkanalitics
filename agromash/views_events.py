@@ -17,7 +17,6 @@ from django.shortcuts import get_object_or_404, render
 from django.urls import reverse
 from django.utils import timezone
 from django.views.decorators.http import require_GET, require_http_methods, require_POST
-from django.views.decorators.csrf import csrf_exempt
 
 from .models import Alarm, AlarmCase, AlarmDocument, Monitor, UserMonitorAccess
 from .va_api_client import VAApiClient
@@ -478,7 +477,6 @@ def _filter_alarms(*, user, cleaned: dict, sort: str = 'time', direction: str = 
         alarms.sort(key=lambda a: (getattr(a, 'case_description', '') or ''), reverse=reverse)
     return alarms
 
-@csrf_exempt
 @login_required
 @require_GET
 def events_list(request: HttpRequest):
@@ -574,7 +572,6 @@ def events_list(request: HttpRequest):
     )
 
 
-@csrf_exempt
 @login_required
 @require_GET
 def events_table_body(request: HttpRequest):
@@ -626,7 +623,6 @@ def _render_case_partial(request: HttpRequest, *, alarm: Alarm, case: AlarmCase)
         },
     )
 
-@csrf_exempt
 @login_required
 @require_http_methods(["GET", "POST"])
 def alarm_case_modal(request: HttpRequest, alarm_pk: int):
@@ -662,7 +658,6 @@ def alarm_case_modal(request: HttpRequest, alarm_pk: int):
 
     return _render_case_partial(request, alarm=alarm, case=case)
 
-@csrf_exempt
 @login_required
 @require_POST
 def alarm_document_delete(request: HttpRequest, doc_pk: int):
@@ -676,7 +671,6 @@ def alarm_document_delete(request: HttpRequest, doc_pk: int):
     doc.delete()
     return _render_case_partial(request, alarm=alarm, case=case)
 
-@csrf_exempt
 @login_required
 @require_GET
 def alarm_document_file(request: HttpRequest, doc_pk: int):
@@ -849,7 +843,6 @@ def _export_columns(request: Optional[HttpRequest] = None) -> Dict[str, Tuple[st
 
     return columns
 
-@csrf_exempt
 @login_required
 @require_GET
 def events_export_xlsx(request: HttpRequest):
@@ -936,7 +929,6 @@ def events_export_xlsx(request: HttpRequest):
     resp['Content-Disposition'] = f'attachment; filename="{filename}"'
     return resp
 
-@csrf_exempt
 @login_required
 @require_GET
 def event_export_xlsx(request: HttpRequest, alarm_pk: int):
@@ -1167,7 +1159,6 @@ def _fetch_alarm_snapshot_bytes(alarm: Alarm) -> Optional[bytes]:
     except Exception:
         return None
 
-@csrf_exempt
 @login_required
 @require_GET
 def event_export_pdf(request: HttpRequest, alarm_pk: int):
