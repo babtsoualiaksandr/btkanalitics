@@ -153,6 +153,14 @@ class AccountVideoAnalytics(models.Model):
     parser_stopped_at = models.DateTimeField(null=True, blank=True)
     parser_heartbeat_at = models.DateTimeField(null=True, blank=True)
     parser_last_error = models.TextField(null=True, blank=True)
+    parser_restart_attempt = models.PositiveIntegerField(
+        default=0,
+        help_text=(
+            "Счётчик последовательных падений подряд (эпизод флаппинга). "
+            "Сбрасывается, если между падениями прошло больше "
+            "PARSER_BACKOFF_EPISODE_WINDOW_MIN минут — см. auto_restart_error_parsers."
+        ),
+    )
 
     objects = AccountVideoAnalyticsQuerySet.as_manager()
 
