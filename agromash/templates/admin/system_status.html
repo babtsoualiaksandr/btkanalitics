@@ -89,6 +89,11 @@
         {% endfor %}
       </tbody>
     </table>
+    <div class="muted" style="padding: 8px 0;">
+      <code>btkanalitics-alert@status-check.service</code> — шаблонный юнит Telegram-алертера (срабатывает по
+      OnFailure= у остальных сервисов). <code>inactive</code>/<code>dead</code> здесь — это норма (он живёт только
+      момент срабатывания); важно только <code>UnitFileState=static</code> — значит шаблон установлен корректно.
+    </div>
   </div>
 
   <h2>Парсеры</h2>

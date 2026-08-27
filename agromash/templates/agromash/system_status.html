@@ -92,6 +92,11 @@
       {% endfor %}
     </tbody>
   </table>
+  <div class="muted">
+    <code>btkanalitics-alert@status-check.service</code> — шаблонный юнит Telegram-алертера (срабатывает по OnFailure=
+    у остальных сервисов). <code>inactive</code>/<code>dead</code> здесь — это норма (он живёт только момент
+    срабатывания); важно только <code>UnitFileState=static</code> — значит шаблон установлен корректно.
+  </div>
 
   <h2>Парсеры</h2>
   <div class="muted">Запущенные парсеры определяются по `parser_status=running` и heartbeat не старше 2 минут. «Воркер» — реальный узел Celery, который сейчас выполняет задачу (должен начинаться с <code>parser@</code>).</div>
