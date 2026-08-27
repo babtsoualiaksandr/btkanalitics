@@ -72,7 +72,11 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
-    'btkanalitics.middleware.ConditionalHttpsMiddleware',
+    # ВРЕМЕННО ОТКЛЮЧЕНО: вызывало ERR_TOO_MANY_REDIRECTS на проде
+    # (request.is_secure() не был True для реального HTTPS-трафика,
+    # хотя curl-проверка до включения редиректа этого не показала).
+    # Разбираемся, что в цепочке nginx/Cloudflare реально долетает не так.
+    # 'btkanalitics.middleware.ConditionalHttpsMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -100,8 +104,10 @@ SECURE_CROSS_ORIGIN_OPENER_POLICY = None
 # используется как прямой LAN-доступ в обход прокси-цепочки, и глобальный
 # SECURE_SSL_REDIRECT/COOKIE_SECURE сломал бы там логин.
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
-SESSION_COOKIE_SECURE = True
-CSRF_COOKIE_SECURE = True
+# ВРЕМЕННО ОТКЛЮЧЕНО вместе с ConditionalHttpsMiddleware выше — без неё
+# эти флаги глобальны и ломают логин по прямому LAN-доступу (10.0.0.2:9091).
+# SESSION_COOKIE_SECURE = True
+# CSRF_COOKIE_SECURE = True
 
 ROOT_URLCONF = 'btkanalitics.urls'
 
