@@ -532,8 +532,8 @@ def _process_sse_event(
 
             Alarm.objects.get_or_create(
                 alarm_id=alarm_id,
-                account=account,
                 defaults={
+                    "account": account,
                     "monitor_id": alarm.get("monitor_id", monitor_id),
                     "monitor_name": alarm.get("monitor_name", monitor_name or ""),
                     "topic": alarm.get("topic", ""),
