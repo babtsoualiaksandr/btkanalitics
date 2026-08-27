@@ -116,17 +116,35 @@ class VAApiClient:
             self._combined_ca_bundle_path = ""
             return ""
 
-        # Пишем в /tmp, чтобы не требовать прав на запись в проект/venv.
-        fd, out_path = tempfile.mkstemp(prefix="va_ca_bundle_", suffix=".pem")
+        combined = "\n\n".join(parts)
+
+        # Один общий файл с фиксированным именем в /tmp, а не tempfile.mkstemp
+        # на каждый экземпляр клиента — иначе при каждом рестарте SSE-парсера
+        # (а он "вечный" и рестартуется часто) в /tmp копился новый
+        # va_ca_bundle_*.pem без удаления старого. Перезаписываем атомарно
+        # (os.replace) и только если содержимое реально изменилось —
+        # безопасно при гонке между несколькими форкнутыми процессами.
+        out_path = os.path.join(tempfile.gettempdir(), "btkanalitics_va_ca_bundle.pem")
         try:
-            with os.fdopen(fd, "w", encoding="utf-8") as out:
-                out.write("\n\n".join(parts))
-        except Exception:
+            with open(out_path, "r", encoding="utf-8") as f:
+                existing = f.read()
+        except OSError:
+            existing = None
+
+        if existing != combined:
+            fd, tmp_path = tempfile.mkstemp(
+                prefix="va_ca_bundle_", suffix=".pem.tmp", dir=tempfile.gettempdir()
+            )
             try:
-                os.close(fd)
+                with os.fdopen(fd, "w", encoding="utf-8") as out:
+                    out.write(combined)
+                os.replace(tmp_path, out_path)
             except Exception:
-                pass
-            raise
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+                raise
 
         self._combined_ca_bundle_path = out_path
         return out_path
