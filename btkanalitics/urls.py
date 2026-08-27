@@ -26,7 +26,7 @@ urlpatterns = [
     path('admin/system-status/', agromash_views.admin_system_status, name='admin_system_status'),
     path('admin/', admin.site.urls),
     path('accounts/', include('django.contrib.auth.urls')),
-    path('agromash/', include('agromash.urls')),
+    path('', include('agromash.urls')),
 ]
 
 if settings.DEBUG:
