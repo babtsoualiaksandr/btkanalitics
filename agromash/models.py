@@ -262,6 +262,12 @@ class Alarm(models.Model):
     data = models.JSONField()
     account = models.ForeignKey(AccountVideoAnalytics, on_delete=models.CASCADE)
 
+    class Meta:
+        indexes = [
+            models.Index(fields=['start_time'], name='alarm_start_time_idx'),
+            models.Index(fields=['monitor_id', 'start_time'], name='alarm_monitor_start_idx'),
+        ]
+
     def __str__(self):
         return f"Alarm {self.alarm_id} - {self.topic}"
 
