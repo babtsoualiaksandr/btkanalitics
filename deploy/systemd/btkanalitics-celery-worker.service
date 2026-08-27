@@ -2,6 +2,7 @@
 Description=btkanalitics Celery worker
 PartOf=btkanalitics.target
 After=network.target
+OnFailure=btkanalitics-alert@%n.service
 
 [Service]
 Type=simple
