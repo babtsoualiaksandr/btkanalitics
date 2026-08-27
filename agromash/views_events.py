@@ -10,13 +10,18 @@ from typing import Dict, Iterable, List, Optional, Tuple
 from django.conf import settings
 from django import forms
 from django.contrib.auth.decorators import login_required
-from django.core.exceptions import PermissionDenied
 from django.db.models import Q
 from django.http import FileResponse, Http404, HttpRequest, HttpResponse
 from django.shortcuts import get_object_or_404, render
 from django.urls import reverse
 from django.utils import timezone
 from django.views.decorators.http import require_GET, require_http_methods, require_POST
+
+from agromash.services.common import (
+    ALARM_EPOCH_MS_THRESHOLD,
+    alarm_epoch_to_aware_dt,
+    assert_events_access,
+)
 
 from .models import Alarm, AlarmCase, AlarmDocument, Monitor, UserMonitorAccess
 from .va_api_client import VAApiClient
@@ -25,28 +30,8 @@ from .va_api_client import VAApiClient
 logger = logging.getLogger(__name__)
 
 
-def _assert_events_access(user) -> None:
-    """Доп. ограничение доступа к web-странице событий.
-
-    Помимо обычной авторизации и `UserMonitorAccess`, можно запретить доступ
-    к самому dashboard пользователям без прав.
-    """
-
-    if getattr(user, 'is_staff', False) or getattr(user, 'is_superuser', False):
-        return
-    if user.has_perm('agromash.can_view_events'):
-        return
-    raise PermissionDenied
-
-
-def _alarm_ts_to_aware_utc(value: int) -> Optional[datetime.datetime]:
-    """Alarm.start_time/end_time (сек/мс epoch) -> aware UTC datetime."""
-    if value is None:
-        return None
-    ts = int(value)
-    if ts > 1_000_000_000_000:
-        ts = ts / 1000.0
-    return datetime.datetime.fromtimestamp(ts, tz=datetime.timezone.utc)
+_assert_events_access = assert_events_access
+_alarm_ts_to_aware_utc = alarm_epoch_to_aware_dt
 
 
 def _json_dump(v) -> str:
@@ -259,7 +244,7 @@ def _alarm_start_time_range_q(*, dt_from: Optional[datetime.datetime], dt_to: Op
       - мс: значения >= 1e12
     """
 
-    TH_MS = 1_000_000_000_000
+    TH_MS = ALARM_EPOCH_MS_THRESHOLD
 
     # prepare bounds
     from_sec = from_ms = None

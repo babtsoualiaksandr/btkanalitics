@@ -7,7 +7,6 @@ from django.contrib.auth.forms import UserChangeForm as DjangoUserChangeForm
 from django.contrib.auth.models import User
 from django.utils.html import format_html
 from django.utils import timezone
-import datetime
 from django.db.models import Count
 from django.conf import settings
 from django.http import Http404, HttpResponse
@@ -37,6 +36,7 @@ from .tasks import generate_fuel_report_xlsx_cache
 from .tasks import is_task_active
 from .tasks import send_fuel_report_xlsx_to_subscribers
 
+from agromash.services.common import alarm_epoch_to_aware_dt
 from agromash.services.fuel_report_exporter import FUEL_REPORT_XLSX_COLUMNS
 
 from agromash.services.fuel_report_importer import FuelImportError, import_fuel_report_from_xlsx
@@ -470,19 +470,7 @@ class AlarmAdmin(admin.ModelAdmin):
         'end_time_human',
     )
 
-    @staticmethod
-    def _to_aware_dt(value: int):
-        """BigInteger timestamp -> aware datetime.
-
-        В данных VA встречаются epoch в секундах или миллисекундах.
-        Эвристика: > 1e12 считаем миллисекундами.
-        """
-        if value is None:
-            return None
-        ts = int(value)
-        if ts > 1_000_000_000_000:
-            ts = ts / 1000.0
-        return datetime.datetime.fromtimestamp(ts, tz=datetime.timezone.utc)
+    _to_aware_dt = staticmethod(alarm_epoch_to_aware_dt)
 
     def start_time_human(self, obj):
         dt = self._to_aware_dt(obj.start_time)
