@@ -95,22 +95,35 @@ def _mark_stopped(account_id: int) -> None:
     logger.info("va_parser mark_stopped account_id=%s at=%s", account_id, now.isoformat())
 
 
-def _mark_error(account_id: int, *, error_text: str) -> None:
+def _mark_error(account_id: int, *, error_text: str, clear_tokens: bool = False) -> None:
     now = timezone.now()
-    AccountVideoAnalytics.objects.filter(pk=account_id).update(
-        parser_status=AccountVideoAnalytics.PARSER_STATUS_ERROR,
-        parser_task_id=None,  # Сбрасываем task_id, чтобы можно было перезапустить
-        parser_last_error=error_text[:5000],
-        parser_stopped_at=now,
-        parser_heartbeat_at=now,
-    )
+    update_fields = {
+        "parser_status": AccountVideoAnalytics.PARSER_STATUS_ERROR,
+        "parser_task_id": None,  # Сбрасываем task_id, чтобы можно было перезапустить
+        "parser_last_error": error_text[:5000],
+        "parser_stopped_at": now,
+        "parser_heartbeat_at": now,
+    }
+    if clear_tokens:
+        # На проде наблюдалось: после исчерпания auth_failures (протухшая
+        # пара access/refresh_token) авто-рестарт раз за разом пытался
+        # реанимировать те же самые токены и падал точно так же — помогало
+        # только ручное удаление токенов из аккаунта. ensure_authenticated()
+        # делает чистый login только когда access_token пуст, поэтому здесь
+        # обнуляем оба токена — следующий авто-рестарт пойдёт по пути
+        # "токенов нет -> login по паролю" автоматически, без ручного вмешательства.
+        update_fields["access_token"] = None
+        update_fields["refresh_token"] = None
+
+    AccountVideoAnalytics.objects.filter(pk=account_id).update(**update_fields)
 
     # Stacktrace логируется в месте, где исключение поймано. Здесь — только причина.
     logger.error(
-        "va_parser mark_error account_id=%s at=%s error=%s",
+        "va_parser mark_error account_id=%s at=%s error=%s clear_tokens=%s",
         account_id,
         now.isoformat(),
         (error_text or "")[:500],
+        clear_tokens,
     )
 
 
@@ -277,7 +290,11 @@ def run_parse_event(
                 )
 
                 if auth_failures >= int(ctx.max_auth_failures):
-                    _mark_error(account_id, error_text=f"Auth failed {auth_failures} times: {e}")
+                    _mark_error(
+                        account_id,
+                        error_text=f"Auth failed {auth_failures} times: {e}",
+                        clear_tokens=True,
+                    )
                     return
 
                 # Если API отдает 429 — уважаем Retry-After (если задан), иначе небольшой backoff.
@@ -314,7 +331,11 @@ def run_parse_event(
                     str(e),
                 )
                 if auth_failures >= int(ctx.max_auth_failures):
-                    _mark_error(account_id, error_text=f"SSE auth failed {auth_failures} times: {e}")
+                    _mark_error(
+                        account_id,
+                        error_text=f"SSE auth failed {auth_failures} times: {e}",
+                        clear_tokens=True,
+                    )
                     return
 
             # Если stop был запрошен во время SSE — выходим.
