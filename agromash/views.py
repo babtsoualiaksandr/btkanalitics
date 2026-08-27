@@ -134,7 +134,15 @@ def _host_memory_summary() -> dict:
             "error": None,
         }
     except Exception as e:
-        return {"error": str(e)}
+        return {
+            "total_gb": None,
+            "available_gb": None,
+            "used_gb": None,
+            "used_pct": None,
+            "swap_total_gb": None,
+            "swap_used_gb": None,
+            "error": str(e),
+        }
 
 
 def _redis_queue_lengths() -> dict:
