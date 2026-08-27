@@ -231,6 +231,25 @@
   .fr-page .fr-status--bad { color: var(--btk-danger); background: rgba(183, 28, 28, 0.08); }
 
   .fr-page tr.fr-row--mismatch { background: rgba(183, 28, 28, 0.05); }
+
+  /* ---------- Analysis progress bar ---------- */
+  .fr-progress {
+    width: 108px;
+    height: 6px;
+    border-radius: 4px;
+    background: rgba(0, 114, 206, 0.12);
+    overflow: hidden;
+    margin-top: 5px;
+  }
+  .fr-progress__bar {
+    height: 100%;
+    width: 0%;
+    border-radius: 4px;
+    background: linear-gradient(90deg, var(--btk-blue), var(--fr-teal));
+    transition: width 0.4s ease;
+  }
+
+  #fuelreport-operations-dialog { width: min(1040px, calc(100vw - 24px)); }
 </style>
 {% endblock %}
 
@@ -329,6 +348,7 @@
             <th>Строк</th>
             <th>Анализ</th>
             <th>Отчёт</th>
+            <th>Результаты</th>
             <th>Отправка</th>
           </tr>
         </thead>
@@ -352,6 +372,7 @@
                     <button class="btk-btn btk-btn--small btk-btn--ghost" type="button" disabled>
                       <span class="js-task-label">Анализ…</span>
                     </button>
+                    <div class="fr-progress"><div class="fr-progress__bar js-task-progress-bar"></div></div>
                     <div class="btk-hint js-task-hint">в очереди</div>
                   </div>
                 {% elif r.analysis_status == 'done' %}
@@ -404,6 +425,18 @@
                 {% endif %}
               </td>
 
+              {# --- Результаты (просмотр строк отчёта) --- #}
+              <td class="btk-col-actions">
+                {% if r.rows_count %}
+                  <button class="btk-btn btk-btn--small btk-btn--ghost js-fuelreport-operations" type="button" data-report-id="{{ r.id }}">
+                    <svg class="fr-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 15v3"/><path d="M12 10v8"/><path d="M17 6v12"/></svg>
+                    Показать записи
+                  </button>
+                {% else %}
+                  <span class="btk-muted">нет строк</span>
+                {% endif %}
+              </td>
+
               {# --- Отправка --- #}
               <td class="btk-col-actions">
                 <button class="btk-btn btk-btn--small btk-btn--ghost js-fuelreport-send" type="button" data-report-id="{{ r.id }}">
@@ -413,7 +446,7 @@
               </td>
             </tr>
           {% empty %}
-            <tr><td colspan="9" class="btk-muted">Пока нет загруженных отчётов.</td></tr>
+            <tr><td colspan="10" class="btk-muted">Пока нет загруженных отчётов.</td></tr>
           {% endfor %}
         </tbody>
       </table>
@@ -539,6 +572,16 @@
     </form>
   </div>
 </dialog>
+
+<dialog class="btk-dialog" id="fuelreport-operations-dialog">
+  <div class="btk-dialog__header">
+    <div class="btk-dialog__title" id="fuelreport-operations-title">Результаты анализа</div>
+    <button class="btk-btn btk-btn--ghost btk-btn--small" type="button" id="fuelreport-operations-cancel">Закрыть</button>
+  </div>
+  <div class="btk-dialog__body" id="fuelreport-operations-body">
+    <p class="btk-muted">Загрузка…</p>
+  </div>
+</dialog>
 {% endblock %}
 
 {% block scripts %}
@@ -569,11 +612,19 @@
     const titleEnq = document.getElementById('fuelreport-enqueue-title');
     const btnCancelEnq = document.getElementById('fuelreport-enqueue-cancel');
 
+    const dlgOps = document.getElementById('fuelreport-operations-dialog');
+    const titleOps = document.getElementById('fuelreport-operations-title');
+    const bodyOps = document.getElementById('fuelreport-operations-body');
+    const btnCancelOps = document.getElementById('fuelreport-operations-cancel');
+
     function sendUrl(reportId) {
       return `/agromash/fuel-reports/${reportId}/send/`;
     }
     function exportUrl(reportId) {
       return `/agromash/fuel-reports/${reportId}/export/`;
+    }
+    function operationsUrl(reportId) {
+      return `/agromash/fuel-reports/${reportId}/operations/`;
     }
 
     document.addEventListener('click', function (e) {
@@ -596,8 +647,23 @@
       if (dlgEnq && typeof dlgEnq.showModal === 'function') dlgEnq.showModal();
     });
 
+    document.addEventListener('click', function (e) {
+      const btn = e.target.closest('.js-fuelreport-operations');
+      if (!btn) return;
+      e.preventDefault();
+      const reportId = btn.getAttribute('data-report-id');
+      titleOps.textContent = 'Результаты анализа (отчёт #' + reportId + ')';
+      bodyOps.innerHTML = '<p class="btk-muted">Загрузка…</p>';
+      if (dlgOps && typeof dlgOps.showModal === 'function') dlgOps.showModal();
+      fetch(operationsUrl(reportId))
+        .then(function (resp) { return resp.ok ? resp.text() : Promise.reject(resp.status); })
+        .then(function (html) { bodyOps.innerHTML = html; })
+        .catch(function () { bodyOps.innerHTML = '<p class="btk-muted" style="color:var(--btk-danger);">Не удалось загрузить записи.</p>'; });
+    });
+
     if (btnCancel) btnCancel.addEventListener('click', function () { if (dlg) dlg.close(); });
     if (btnCancelEnq) btnCancelEnq.addEventListener('click', function () { if (dlgEnq) dlgEnq.close(); });
+    if (btnCancelOps) btnCancelOps.addEventListener('click', function () { if (dlgOps) dlgOps.close(); });
   })();
 
   (function () {
@@ -628,6 +694,15 @@
           if (taskType === 'analysis') modelStatus = report.analysis_status || '';
           else if (taskType === 'export') modelStatus = report.export_xlsx_status || '';
 
+          if (taskType === 'analysis' && data.meta && typeof data.meta.percent === 'number') {
+            const bar = el.querySelector('.js-task-progress-bar');
+            if (bar) bar.style.width = data.meta.percent + '%';
+            if (hintEl) {
+              const cur = data.meta.current || 0, tot = data.meta.total || 0;
+              hintEl.textContent = data.meta.percent + '%' + (tot ? ' (' + cur + '/' + tot + ')' : '');
+            }
+          }
+
           let finished = false, success = false, errorText = '';
           if (taskType === 'analysis') {
             if (modelStatus === 'done') { finished = true; success = true; }
@@ -646,6 +721,8 @@
             clearInterval(interval);
             el.classList.add('js-task-done');
             if (success) {
+              const bar = el.querySelector('.js-task-progress-bar');
+              if (bar) bar.style.width = '100%';
               if (labelEl) labelEl.textContent = '✅ Готово';
               if (hintEl) hintEl.textContent = 'обновите страницу';
               setTimeout(function () { location.reload(); }, 1500);
