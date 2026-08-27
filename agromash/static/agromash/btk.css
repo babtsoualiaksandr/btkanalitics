@@ -117,12 +117,17 @@ code {
   gap: 12px;
 }
 
-/* Строка фильтров даты и лимита на /agromash/events */
+/* Строка фильтров даты и лимита на /events */
 .btk-filter-row {
   display: grid;
   grid-template-columns: 1fr 1fr auto auto;
   gap: 12px;
   align-items: end;
+}
+
+/* Компактный вариант (2 поля даты + кнопки) — /fuel-reports/ */
+.btk-filter-row--compact {
+  grid-template-columns: repeat(2, minmax(160px, 220px)) auto;
 }
 
 .btk-filter-row > .btk-field .btk-hint {
@@ -468,6 +473,16 @@ textarea.btk-textarea { resize: vertical; }
 /* Мелкие правки визуального баланса */
 .btk-card__header .btk-hint { margin-top: 2px; }
 .btk-col-actions { white-space: nowrap; }
+
+/* Пагинация (/fuel-reports/, /events/) */
+.btk-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  margin-top: 14px;
+}
+.btk-pagination__disabled { opacity: 0.4; pointer-events: none; }
 
 /* Django messages framework — общий блок для всех non-admin страниц */
 .btk-messages { list-style: none; margin: 0 0 16px; padding: 0; display: grid; gap: 8px; }

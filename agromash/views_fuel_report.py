@@ -11,9 +11,11 @@ import logging
 from django import forms
 from django.contrib import messages
 from django.contrib.admin.views.decorators import staff_member_required
+from django.core.paginator import Paginator
 from django.http import Http404, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
+from django.utils.dateparse import parse_date
 from django.views.decorators.http import require_GET, require_POST
 
 from .models import FuelOperation, FuelReport, TelegramSubscriber
@@ -26,6 +28,7 @@ from .views import get_running_parsers_liveness
 logger = logging.getLogger(__name__)
 
 OPERATIONS_LIST_LIMIT = 500
+REPORTS_PAGE_SIZE = 20
 
 
 class FuelReportImportForm(forms.Form):
@@ -37,12 +40,27 @@ class FuelReportImportForm(forms.Form):
 @staff_member_required
 @require_GET
 def fuel_report_list(request):
-    reports = FuelReport.objects.all().defer("export_xlsx_content")
+    all_reports = FuelReport.objects.all().defer("export_xlsx_content")
     stats = {
-        "total": reports.count(),
-        "analysis_pending": reports.filter(analysis_status=FuelReport.ANALYSIS_STATUS_PENDING).count(),
-        "export_ready": reports.filter(export_xlsx_status=FuelReport.EXPORT_STATUS_READY).count(),
+        "total": all_reports.count(),
+        "analysis_pending": all_reports.filter(analysis_status=FuelReport.ANALYSIS_STATUS_PENDING).count(),
+        "export_ready": all_reports.filter(export_xlsx_status=FuelReport.EXPORT_STATUS_READY).count(),
     }
+
+    date_from_raw = (request.GET.get("date_from") or "").strip()
+    date_to_raw = (request.GET.get("date_to") or "").strip()
+    date_from = parse_date(date_from_raw)
+    date_to = parse_date(date_to_raw)
+
+    filtered_reports = all_reports
+    if date_from:
+        filtered_reports = filtered_reports.filter(created_at__date__gte=date_from)
+    if date_to:
+        filtered_reports = filtered_reports.filter(created_at__date__lte=date_to)
+
+    paginator = Paginator(filtered_reports, REPORTS_PAGE_SIZE)
+    page_obj = paginator.get_page(request.GET.get("page"))
+
     xlsx_columns = [
         {
             "key": str(c.get("key")),
@@ -53,7 +71,10 @@ def fuel_report_list(request):
         if c.get("key") and c.get("header")
     ]
     ctx = {
-        "reports": reports,
+        "reports": page_obj,
+        "page_obj": page_obj,
+        "date_from": date_from_raw,
+        "date_to": date_to_raw,
         "stats": stats,
         "import_form": FuelReportImportForm(),
         "telegram_subscribers": TelegramSubscriber.objects.all().order_by("username", "chat_id"),

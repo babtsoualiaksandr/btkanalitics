@@ -384,7 +384,7 @@ class AlarmFilterForm(forms.Form):
             self.fields['monitors'].queryset = allowed_monitors_qs
 
 
-def _filter_alarms(*, user, cleaned: dict, sort: str = 'time', direction: str = 'desc') -> List[Alarm]:
+def _filter_alarms(*, user, cleaned: dict, sort: str = 'time', direction: str = 'desc', page: int = 1) -> Tuple[List[Alarm], int]:
     allowed_monitors = list(_allowed_monitors_qs(user))
     selected_monitors = list(cleaned.get('monitors') or [])
 
@@ -392,13 +392,13 @@ def _filter_alarms(*, user, cleaned: dict, sort: str = 'time', direction: str = 
     # - если не выбран ни один монитор — не показываем события
     # - если выбраны мониторы — фильтруем по ним
     if not selected_monitors:
-        return []
+        return [], 0
 
     effective_monitors = selected_monitors
     force_filter = True
 
     if force_filter and not effective_monitors:
-        return []
+        return [], 0
 
     qs = (
         Alarm.objects.all()
@@ -410,7 +410,7 @@ def _filter_alarms(*, user, cleaned: dict, sort: str = 'time', direction: str = 
         # Фильтрация по выбранным (или разрешённым) мониторам через monitor_ref и/или monitor_id.
         q_mon = _monitor_filter_q(monitors=effective_monitors)
         if q_mon is None:
-            return []
+            return [], 0
         qs = qs.filter(q_mon)
 
     # Даты (корректный фильтр для сек/мс)
@@ -424,6 +424,14 @@ def _filter_alarms(*, user, cleaned: dict, sort: str = 'time', direction: str = 
     except Exception:
         limit = 200
     limit = max(10, min(limit, 1000))
+
+    total_count = qs.count()
+
+    try:
+        page = max(1, int(page or 1))
+    except Exception:
+        page = 1
+    offset = (page - 1) * limit
 
     # --- Sorting ---
     sort = str(sort or 'time')
@@ -443,7 +451,7 @@ def _filter_alarms(*, user, cleaned: dict, sort: str = 'time', direction: str = 
         # fallback
         qs = qs.order_by('-start_time')
 
-    alarms = list(qs[:limit])
+    alarms = list(qs[offset:offset + limit])
 
     # Localized display fields
     for a in alarms:
@@ -455,12 +463,13 @@ def _filter_alarms(*, user, cleaned: dict, sort: str = 'time', direction: str = 
         case = getattr(a, 'case', None)
         a.case_description = str(getattr(case, 'description', '') or '') if case else ''
 
-    # Python-level sort для вычисляемых/не-БД полей
+    # Python-level sort для вычисляемых/не-БД полей (только внутри уже
+    # выбранной страницы — как и раньше, до появления пагинации).
     if sort == 'plate':
         alarms.sort(key=lambda a: (getattr(a, 'plate_numbers', '') or ''), reverse=reverse)
     elif sort == 'description':
         alarms.sort(key=lambda a: (getattr(a, 'case_description', '') or ''), reverse=reverse)
-    return alarms
+    return alarms, total_count
 
 @login_required
 @require_GET
@@ -498,8 +507,14 @@ def events_list(request: HttpRequest):
             next_dir = 'asc'
         q['sort'] = key
         q['dir'] = next_dir
+        q['page'] = '1'
         enc = q.urlencode()
         return f"?{enc}" if enc else "?"
+
+    try:
+        page = max(1, int(request.GET.get('page') or 1))
+    except Exception:
+        page = 1
 
     sort_urls = {
         'monitor': _build_sort_url('monitor'),
@@ -511,14 +526,16 @@ def events_list(request: HttpRequest):
 
     form = AlarmFilterForm(request.GET or None, allowed_monitors_qs=allowed_monitors, initial=initial)
     if form.is_valid():
-        alarms = _filter_alarms(user=user, cleaned=form.cleaned_data, sort=sort, direction=direction)
+        alarms, total_count = _filter_alarms(user=user, cleaned=form.cleaned_data, sort=sort, direction=direction, page=page)
         try:
             limit_value = int(form.cleaned_data.get('limit') or 0)
         except Exception:
             limit_value = 0
     else:
-        alarms = []
+        alarms, total_count = [], 0
         limit_value = int(initial.get('limit') or 20)
+
+    total_pages = max(1, -(-total_count // limit_value)) if limit_value else 1
 
     # Поля для экспорта: все поля Alarm + вложенные модели
     export_columns = _export_columns(request)
@@ -544,6 +561,9 @@ def events_list(request: HttpRequest):
             'form': form,
             'alarms': alarms,
             'limit_value': limit_value,
+            'page': page,
+            'total_pages': total_pages,
+            'total_count': total_count,
             'sort': sort,
             'dir': direction,
             'sort_urls': sort_urls,
@@ -587,9 +607,14 @@ def events_table_body(request: HttpRequest):
     if direction not in ('asc', 'desc'):
         direction = 'desc'
 
+    try:
+        page = max(1, int(request.GET.get('page') or 1))
+    except Exception:
+        page = 1
+
     form = AlarmFilterForm(request.GET or None, allowed_monitors_qs=allowed_monitors, initial=initial)
     if form.is_valid():
-        alarms = _filter_alarms(user=user, cleaned=form.cleaned_data, sort=sort, direction=direction)
+        alarms, _total_count = _filter_alarms(user=user, cleaned=form.cleaned_data, sort=sort, direction=direction, page=page)
     else:
         alarms = []
 
@@ -854,7 +879,7 @@ def events_export_xlsx(request: HttpRequest):
     if not field_keys:
         field_keys = list(sorted(columns.keys()))
 
-    alarms = _filter_alarms(user=user, cleaned=form.cleaned_data, sort=sort, direction=direction)
+    alarms, _total_count = _filter_alarms(user=user, cleaned=form.cleaned_data, sort=sort, direction=direction)
 
     try:
         import openpyxl
