@@ -1,0 +1,51 @@
+<p class="btk-hint">
+  Отчёт #{{ report.id }} — {{ report.organization_name|default:"—" }}, показано {{ shown_ops }} из {{ total_ops }} строк.
+</p>
+<div class="btk-tablewrap" style="max-height: 60vh;">
+  <table class="btk-table">
+    <thead>
+      <tr>
+        <th>Дата/время</th>
+        <th>Карта</th>
+        <th>АЗС</th>
+        <th>Топливо</th>
+        <th>Кол-во</th>
+        <th>Сумма</th>
+        <th>Гос. номер</th>
+        <th>Совпадений</th>
+        <th>Проанализировано</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for op in operations %}
+        <tr>
+          <td>{{ op.operation_at|date:"Y-m-d H:i" }}</td>
+          <td><code>{{ op.card_number }}</code></td>
+          <td>{{ op.station_number|default:"—" }}</td>
+          <td>{{ op.product_name|default:"—" }}</td>
+          <td>{{ op.quantity|default_if_none:"—" }} {{ op.unit }}</td>
+          <td>{{ op.total_cost|default_if_none:"—" }}</td>
+          <td>
+            {% if op.plate_identity %}
+              <span class="fr-status fr-status--ok">{{ op.plate_identity.number }}</span>
+            {% elif op.fallback_plate_numbers %}
+              <span class="fr-status fr-status--warn">{{ op.fallback_plate_numbers.0.number|default:"?" }}</span>
+            {% else %}
+              <span class="btk-muted">—</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if op.matched_alarms %}
+              <span class="fr-status fr-status--ok">{{ op.matched_alarms|length }}</span>
+            {% else %}
+              <span class="btk-muted">0</span>
+            {% endif %}
+          </td>
+          <td>{% if op.analyzed_at %}{{ op.analyzed_at|date:"Y-m-d H:i" }}{% else %}<span class="btk-muted">—</span>{% endif %}</td>
+        </tr>
+      {% empty %}
+        <tr><td colspan="9" class="btk-muted">В отчёте нет строк.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>

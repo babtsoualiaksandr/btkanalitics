@@ -16,7 +16,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.views.decorators.http import require_GET, require_POST
 
-from .models import FuelReport, TelegramSubscriber
+from .models import FuelOperation, FuelReport, TelegramSubscriber
 from .services.fuel_report_actions import send_to_subscribers, start_analysis, start_export
 from .services.fuel_report_exporter import FUEL_REPORT_XLSX_COLUMNS
 from .services.fuel_report_importer import FuelImportError, import_fuel_report_from_xlsx
@@ -24,6 +24,8 @@ from .views import get_running_parsers_liveness
 
 
 logger = logging.getLogger(__name__)
+
+OPERATIONS_LIST_LIMIT = 500
 
 
 class FuelReportImportForm(forms.Form):
@@ -139,6 +141,23 @@ def fuel_report_download(request, report_id: int):
 
     messages.warning(request, "XLSX ещё не сформирован — нажмите «Сформировать XLSX» и обновите страницу")
     return redirect("fuel_report_list")
+
+
+@staff_member_required
+@require_GET
+def fuel_report_operations(request, report_id: int):
+    """Фрагмент HTML со списком строк отчёта (для показа в диалоге на странице списка)."""
+    report = get_object_or_404(FuelReport, pk=report_id)
+    ops_qs = FuelOperation.objects.filter(report_id=report.id).select_related("plate_identity")
+    total_ops = ops_qs.count()
+    operations = ops_qs.order_by("-operation_at")[:OPERATIONS_LIST_LIMIT]
+    ctx = {
+        "report": report,
+        "operations": operations,
+        "total_ops": total_ops,
+        "shown_ops": min(total_ops, OPERATIONS_LIST_LIMIT),
+    }
+    return render(request, "agromash/_fuel_report_operations.html", ctx)
 
 
 @staff_member_required

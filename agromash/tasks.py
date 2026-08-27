@@ -41,8 +41,16 @@ def analyze_fuel_report_task(self, report_id: int, window_minutes: int = 10, sou
         analysis_error="",
     )
 
+    def _report_progress(done: int, total: int) -> None:
+        percent = int(done * 100 / total) if total else 100
+        self.update_state(state="PROGRESS", meta={"current": done, "total": total, "percent": percent})
+
     try:
-        summary = analyze_fuel_report(report_id=report_id, window_minutes=int(window_minutes))
+        summary = analyze_fuel_report(
+            report_id=report_id,
+            window_minutes=int(window_minutes),
+            progress_cb=_report_progress,
+        )
 
         FuelReport.objects.filter(pk=report_id).update(
             analysis_status=FuelReport.ANALYSIS_STATUS_DONE,

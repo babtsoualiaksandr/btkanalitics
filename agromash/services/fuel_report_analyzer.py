@@ -5,7 +5,7 @@ import logging
 import bisect
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Any, DefaultDict, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Callable, DefaultDict, Dict, Iterable, List, Optional, Tuple
 
 from django.db.models import Max, Min, Q
 from django.utils import timezone
@@ -82,7 +82,12 @@ class FuelReportAnalyzeSummary:
     alarms_candidates: int
 
 
-def analyze_fuel_report(*, report_id: int, window_minutes: int = 10) -> FuelReportAnalyzeSummary:
+def analyze_fuel_report(
+    *,
+    report_id: int,
+    window_minutes: int = 10,
+    progress_cb: Optional[Callable[[int, int], None]] = None,
+) -> FuelReportAnalyzeSummary:
     """Анализ операций FuelOperation внутри FuelReport.
 
     Логика:
@@ -119,6 +124,8 @@ def analyze_fuel_report(*, report_id: int, window_minutes: int = 10) -> FuelRepo
 
     ops_qs = FuelOperation.objects.filter(report_id=report_id)
     ops_total = ops_qs.count()
+    if progress_cb:
+        progress_cb(0, ops_total)
     if ops_total == 0:
         logger.info("analyze_fuel_report: no operations report_id=%s", report_id)
         return FuelReportAnalyzeSummary(
@@ -357,6 +364,8 @@ def analyze_fuel_report(*, report_id: int, window_minutes: int = 10) -> FuelRepo
                 "analyze_fuel_report progress report_id=%s updated=%s/%s",
                 report_id, updated, ops_total,
             )
+            if progress_cb:
+                progress_cb(updated, ops_total)
             batch.clear()
 
     if batch:
@@ -372,6 +381,9 @@ def analyze_fuel_report(*, report_id: int, window_minutes: int = 10) -> FuelRepo
             batch_size=1000,
         )
         updated += len(batch)
+
+    if progress_cb:
+        progress_cb(updated, ops_total)
 
     logger.info(
         "analyze_fuel_report DONE report_id=%s total=%s updated=%s with_pi=%s with_alarms=%s alarms_candidates=%s",

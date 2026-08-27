@@ -14,6 +14,7 @@ urlpatterns = [
     path('fuel-reports/<int:report_id>/analyze/', views_fuel_report.fuel_report_analyze, name='fuel_report_analyze'),
     path('fuel-reports/<int:report_id>/export/', views_fuel_report.fuel_report_export, name='fuel_report_export'),
     path('fuel-reports/<int:report_id>/download/', views_fuel_report.fuel_report_download, name='fuel_report_download'),
+    path('fuel-reports/<int:report_id>/operations/', views_fuel_report.fuel_report_operations, name='fuel_report_operations'),
     path('fuel-reports/<int:report_id>/send/', views_fuel_report.fuel_report_send, name='fuel_report_send'),
 
     # Events dashboard (non-admin)
