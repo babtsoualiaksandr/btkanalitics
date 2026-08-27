@@ -5,15 +5,18 @@ from django.conf import settings
 from django.contrib import admin as django_admin
 from django.contrib.admin.views.decorators import staff_member_required
 from django.contrib.auth.decorators import login_required
-from django.core.exceptions import PermissionDenied
 from django.template.response import TemplateResponse
 from django.views.decorators.csrf import csrf_exempt
 import subprocess
 import os
-import datetime
 from typing import List, Tuple
 from django.utils import timezone
 from django.db.models import Max, Q
+
+from agromash.services.common import (
+    alarm_epoch_to_aware_dt as _to_aware_dt,
+    assert_events_access as _assert_events_access,
+)
 
 from .models import (
     AccountVideoAnalytics,
@@ -25,25 +28,7 @@ from .models import (
 )
 
 
-def _assert_events_access(user) -> None:
-    # same logic as in views_events.py
-    if getattr(user, 'is_staff', False) or getattr(user, 'is_superuser', False):
-        return
-    if user.has_perm('agromash.can_view_events'):
-        return
-    raise PermissionDenied
-
 from .va_api_client import VAApiClient
-
-
-def _to_aware_dt(value: int):
-    """BigInteger epoch (sec or ms) -> aware datetime (UTC)."""
-    if value is None:
-        return None
-    ts = int(value)
-    if ts > 1_000_000_000_000:
-        ts = ts / 1000.0
-    return datetime.datetime.fromtimestamp(ts, tz=datetime.timezone.utc)
 
 
 def _run_cmd(cmd: List[str], timeout_sec: int = 3) -> Tuple[int, str, str]:
