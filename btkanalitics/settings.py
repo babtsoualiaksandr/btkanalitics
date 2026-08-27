@@ -72,11 +72,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
-    # ВРЕМЕННО ОТКЛЮЧЕНО: вызывало ERR_TOO_MANY_REDIRECTS на проде
-    # (request.is_secure() не был True для реального HTTPS-трафика,
-    # хотя curl-проверка до включения редиректа этого не показала).
-    # Разбираемся, что в цепочке nginx/Cloudflare реально долетает не так.
-    # 'btkanalitics.middleware.ConditionalHttpsMiddleware',
+    'btkanalitics.middleware.ConditionalHttpsMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -92,11 +88,18 @@ SECURE_CROSS_ORIGIN_OPENER_POLICY = None
 
 # Публичный домен обслуживается через Cloudflare (TLS терминируется на её
 # стороне) и доходит до Django через трёххоповую цепочку:
-#   Cloudflare -> nginx:443 на 52.207.37.113 (хардкодит X-Forwarded-Proto: https)
-#   -> nginx:80 на 10.0.0.5 -> nginx:9091 на этом сервере -> gunicorn:8091.
-# Все хопы теперь пробрасывают X-Forwarded-Proto без перезаписи, поэтому
-# здесь можно доверять этому заголовку для request.is_secure(). Проверено
-# curl'ом end-to-end (302 на /accounts/login/, без петли редиректов).
+#   Cloudflare -> nginx:443 (ssl_proxy_root) на 52.207.37.113 (хардкодит
+#   X-Forwarded-Proto: https) -> nginx:80 (btkanylitics) на 10.0.0.5
+#   -> nginx:9091 на этом сервере -> gunicorn:8091.
+#
+# ВАЖНО: живой конфиг на КАЖДОМ из этих трёх хостов — это отдельный файл
+# в /etc/nginx/sites-enabled/, который НЕ синхронизируется автоматически
+# ни с этим репозиторием, ни между хостами. `git pull` на 10.0.0.2 не
+# трогает nginx вообще. При любой правке заголовков/прокси — обязательно
+# вручную применять на всех трёх хостах и проверять результат через
+# staff-only /agromash/_debug/headers/ (см. agromash/views.py), а не только
+# косвенно по отсутствию редиректа — так уже прятался баг несколько часов.
+# Подтверждено этим способом: is_secure=true для публичного трафика.
 #
 # SECURE_SSL_REDIRECT сознательно НЕ используется — вместо него
 # ConditionalHttpsMiddleware редиректит на HTTPS и форсирует Secure-флаг
@@ -104,10 +107,8 @@ SECURE_CROSS_ORIGIN_OPENER_POLICY = None
 # используется как прямой LAN-доступ в обход прокси-цепочки, и глобальный
 # SECURE_SSL_REDIRECT/COOKIE_SECURE сломал бы там логин.
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
-# ВРЕМЕННО ОТКЛЮЧЕНО вместе с ConditionalHttpsMiddleware выше — без неё
-# эти флаги глобальны и ломают логин по прямому LAN-доступу (10.0.0.2:9091).
-# SESSION_COOKIE_SECURE = True
-# CSRF_COOKIE_SECURE = True
+SESSION_COOKIE_SECURE = True
+CSRF_COOKIE_SECURE = True
 
 ROOT_URLCONF = 'btkanalitics.urls'
 

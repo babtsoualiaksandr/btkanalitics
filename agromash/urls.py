@@ -6,7 +6,6 @@ from . import views_events
 urlpatterns = [
     path('snapshot/<str:alarm_id>/', views.serve_snapshot, name='serve_snapshot'),
     path('system-status/', views.system_status, name='system_status'),
-    path('_debug/headers/', views.debug_forwarded_headers, name='debug_forwarded_headers'),
 
     # Events dashboard (non-admin)
     path('events/', views_events.events_list, name='events_list'),
