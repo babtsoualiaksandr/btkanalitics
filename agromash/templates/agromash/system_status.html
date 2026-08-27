@@ -47,21 +47,21 @@
   <div class="stat-row">
     <div class="stat-card">
       <div class="stat-label">Память хоста</div>
-      <div class="stat-value">{{ host_memory.used_gb|default:"?" }} / {{ host_memory.total_gb|default:"?" }} ГБ</div>
-      <div class="muted">{{ host_memory.used_pct|default:"?" }}% занято, доступно {{ host_memory.available_gb|default:"?" }} ГБ</div>
+      <div class="stat-value">{{ host_memory.used_gb|default_if_none:"?" }} / {{ host_memory.total_gb|default_if_none:"?" }} ГБ</div>
+      <div class="muted">{{ host_memory.used_pct|default_if_none:"?" }}% занято, доступно {{ host_memory.available_gb|default_if_none:"?" }} ГБ</div>
     </div>
     <div class="stat-card">
       <div class="stat-label">Swap</div>
-      <div class="stat-value">{{ host_memory.swap_used_gb|default:"?" }} / {{ host_memory.swap_total_gb|default:"?" }} ГБ</div>
+      <div class="stat-value">{{ host_memory.swap_used_gb|default_if_none:"?" }} / {{ host_memory.swap_total_gb|default_if_none:"?" }} ГБ</div>
     </div>
     <div class="stat-card">
       <div class="stat-label">Очередь Redis: celery</div>
-      <div class="stat-value">{{ redis_queues.celery|default:"?" }}</div>
+      <div class="stat-value">{{ redis_queues.celery|default_if_none:"?" }}</div>
       <div class="muted">короткие задачи (отчёты, heartbeat)</div>
     </div>
     <div class="stat-card">
       <div class="stat-label">Очередь Redis: parser</div>
-      <div class="stat-value">{{ redis_queues.parser|default:"?" }}</div>
+      <div class="stat-value">{{ redis_queues.parser|default_if_none:"?" }}</div>
       <div class="muted">SSE-парсеры</div>
     </div>
   </div>
