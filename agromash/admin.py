@@ -277,7 +277,8 @@ class AccountVideoAnalyticsAdmin(admin.ModelAdmin):
         if obj.is_parser_running:
             return format_html(
                 '<button type="submit" class="button" style="background:#a61e1e;color:white;" '
-                'formaction="{}" formmethod="post">Stop</button>',
+                'formaction="{}" formmethod="post" '
+                'onclick="return confirm(\'Остановить парсер для этого аккаунта?\');">Stop</button>',
                 stop_url,
             )
 
@@ -1131,7 +1132,8 @@ class FuelReportAdmin(admin.ModelAdmin):
                 hint = f"✅ {timezone.localtime(obj.analysis_finished_at).strftime('%H:%M:%S')}"
             return format_html(
                 '<div class="agromash-admin-action">'
-                '<button type="submit" class="button" formaction="{}" formmethod="post">Перезапустить</button>'
+                '<button type="submit" class="button" formaction="{}" formmethod="post" '
+                'onclick="return confirm(\'Перезапустить анализ? Текущий результат будет заменён.\');">Перезапустить</button>'
                 '<span class="agromash-admin-action-hint">{}</span>'
                 '</div>',
                 run_url, hint,
@@ -1140,7 +1142,8 @@ class FuelReportAdmin(admin.ModelAdmin):
         if status == FuelReport.ANALYSIS_STATUS_ERROR:
             return format_html(
                 '<div class="agromash-admin-action">'
-                '<button type="submit" class="button" formaction="{}" formmethod="post">Повторить</button>'
+                '<button type="submit" class="button" formaction="{}" formmethod="post" '
+                'onclick="return confirm(\'Повторить анализ после ошибки?\');">Повторить</button>'
                 '<span class="agromash-admin-action-hint" style="color:#a61e1e;">❌ ошибка</span>'
                 '</div>',
                 run_url,
