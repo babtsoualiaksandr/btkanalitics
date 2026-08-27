@@ -259,6 +259,12 @@ def _collect_system_status_context() -> dict:
         "nginx.service",
         "postgresql@16-main.service",
         "redis-server.service",
+        # Telegram-алертер (P2-4) — шаблонный oneshot-юнит, инстанс без
+        # аргумента невалиден для systemctl show, поэтому подставляем
+        # фиктивный instance-суффикс. ActiveState=inactive/SubState=dead —
+        # это НОРМА для этого юнита (он живёт только момент срабатывания
+        # OnFailure), важно только UnitFileState=static (шаблон установлен).
+        "btkanalitics-alert@status-check.service",
     ]
     unit_states = [_systemd_unit_state(u) for u in units]
 
