@@ -2,6 +2,7 @@ import json
 import logging
 import random
 import signal
+import threading
 import time
 from dataclasses import dataclass
 from typing import Callable, Optional
@@ -15,6 +16,31 @@ from agromash.va_api_client import VAApiClient, VAAuthError
 
 
 logger = logging.getLogger(__name__)
+
+
+# Реестр account_id, чей SSE-цикл сейчас реально исполняется В ЭТОМ процессе.
+# Используется хуком celery.signals.worker_shutdown (см. btkanalitics/celery.py):
+# при плановой остановке воркера (--pool=threads, где SIGTERM в дочерних
+# потоках не срабатывает — см. ниже) worker_shutdown выполняется в главном
+# потоке процесса и может немедленно пометить ещё числящиеся тут аккаунты
+# на быстрый перезапуск, не дожидаясь обнаружения по heartbeat-таймауту.
+_ACTIVE_ACCOUNT_IDS: set[int] = set()
+_ACTIVE_ACCOUNT_IDS_LOCK = threading.Lock()
+
+
+def get_active_account_ids() -> set[int]:
+    with _ACTIVE_ACCOUNT_IDS_LOCK:
+        return set(_ACTIVE_ACCOUNT_IDS)
+
+
+def _register_active(account_id: int) -> None:
+    with _ACTIVE_ACCOUNT_IDS_LOCK:
+        _ACTIVE_ACCOUNT_IDS.add(account_id)
+
+
+def _unregister_active(account_id: int) -> None:
+    with _ACTIVE_ACCOUNT_IDS_LOCK:
+        _ACTIVE_ACCOUNT_IDS.discard(account_id)
 
 
 # Значения по умолчанию для SSE-парсера (можно переопределить в settings.py)
@@ -95,14 +121,49 @@ def _mark_stopped(account_id: int) -> None:
     logger.info("va_parser mark_stopped account_id=%s at=%s", account_id, now.isoformat())
 
 
-def _mark_error(account_id: int, *, error_text: str, clear_tokens: bool = False) -> None:
+def _next_backoff_attempt(account: AccountVideoAnalytics, *, now) -> int:
+    """Номер попытки для backoff-лесенки (см. PARSER_RESTART_BACKOFF_SCHEDULE_SEC).
+
+    Если с прошлого падения этого аккаунта прошло больше
+    PARSER_BACKOFF_EPISODE_WINDOW_MIN минут — предыдущий эпизод флаппинга
+    считается закончившимся, счётчик стартует заново с 1 (быстрая ступень).
+    Иначе — эскалируем (+1 к прошлому значению).
+    """
+    window_min = int(getattr(settings, "PARSER_BACKOFF_EPISODE_WINDOW_MIN", 5))
+    prev_stopped_at = account.parser_stopped_at
+    if prev_stopped_at and (now - prev_stopped_at) <= timezone.timedelta(minutes=window_min):
+        return int(account.parser_restart_attempt or 0) + 1
+    return 1
+
+
+def _mark_error(
+    account_id: int,
+    *,
+    error_text: str,
+    clear_tokens: bool = False,
+    force_fast_retry: bool = False,
+) -> None:
+    """force_fast_retry=True — для планового (не аварийного) завершения:
+    ступень backoff-лесенки не эскалируется, следующая попытка сразу
+    пойдёт по быстрой первой ступени, независимо от истории падений.
+    """
     now = timezone.now()
+
+    if force_fast_retry:
+        next_attempt = 1
+    else:
+        account = AccountVideoAnalytics.objects.filter(pk=account_id).only(
+            "parser_stopped_at", "parser_restart_attempt"
+        ).first()
+        next_attempt = _next_backoff_attempt(account, now=now) if account else 1
+
     update_fields = {
         "parser_status": AccountVideoAnalytics.PARSER_STATUS_ERROR,
         "parser_task_id": None,  # Сбрасываем task_id, чтобы можно было перезапустить
         "parser_last_error": error_text[:5000],
         "parser_stopped_at": now,
         "parser_heartbeat_at": now,
+        "parser_restart_attempt": next_attempt,
     }
     if clear_tokens:
         # На проде наблюдалось: после исчерпания auth_failures (протухшая
@@ -119,11 +180,12 @@ def _mark_error(account_id: int, *, error_text: str, clear_tokens: bool = False)
 
     # Stacktrace логируется в месте, где исключение поймано. Здесь — только причина.
     logger.error(
-        "va_parser mark_error account_id=%s at=%s error=%s clear_tokens=%s",
+        "va_parser mark_error account_id=%s at=%s error=%s clear_tokens=%s restart_attempt=%s",
         account_id,
         now.isoformat(),
         (error_text or "")[:500],
         clear_tokens,
+        next_attempt,
     )
 
 
@@ -265,6 +327,7 @@ def run_parse_event(
         last_hb = now_monotonic
         _heartbeat(account_id)
 
+    _register_active(account_id)
     try:
         while True:
             now_m = time.monotonic()
@@ -392,6 +455,8 @@ def run_parse_event(
         logger.exception("parse_event failed for account_id=%s", account_id)
         _mark_error(account_id, error_text=str(e))
         raise
+    finally:
+        _unregister_active(account_id)
 
 
 def listen_sse(

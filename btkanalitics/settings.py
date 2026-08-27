@@ -271,8 +271,25 @@ VA_MAX_AUTH_FAILURES = config('VA_MAX_AUTH_FAILURES', default=3, cast=int)
 # Максимальное число подряд неудачных SSE-сессий (< 30 сек).
 VA_MAX_SSE_FAILURES = config('VA_MAX_SSE_FAILURES', default=10, cast=int)
 
-# Время ожидания перед автоматическим перезапуском парсера в статусе error (минуты).
-PARSER_AUTO_RESTART_DELAY_MIN = config('PARSER_AUTO_RESTART_DELAY_MIN', default=5, cast=int)
+# Backoff-лесенка перед автоматическим перезапуском упавшего парсера
+# (в секундах): 1-я попытка почти сразу, дальше по нарастающей, чтобы не
+# долбить реально сломанный VA API повторными логинами. Индекс — это
+# (parser_restart_attempt - 1); значений в списке меньше, чем возможных
+# попыток — сверх длины списка используется последнее (потолок).
+PARSER_RESTART_BACKOFF_SCHEDULE_SEC = [30, 60, 180, 360, 600, 1800]
+
+# Если между двумя последовательными падениями одного и того же аккаунта
+# прошло больше этого времени — считаем, что предыдущий эпизод флаппинга
+# закончился, и следующая попытка снова пойдёт по быстрой первой ступени
+# лесенки, а не продолжит эскалацию с прошлого раза.
+PARSER_BACKOFF_EPISODE_WINDOW_MIN = config('PARSER_BACKOFF_EPISODE_WINDOW_MIN', default=5, cast=int)
+
+# Порог "протухшего" heartbeat для check_parser_heartbeats (сек). Раньше был
+# фиксирован на 5 минут — при штатном keep-alive раз в ~30 сек это слишком
+# долго ждёт обнаружения зависшего/убитого процесса, особенно для парсер-
+# воркера на пуле потоков (--pool=threads), где SIGTERM-обработчик не может
+# сработать (см. agromash/services/parse_event_runner.py).
+PARSER_HEARTBEAT_TIMEOUT_SEC = config('PARSER_HEARTBEAT_TIMEOUT_SEC', default=120, cast=int)
 
 # Периодические задачи (Celery Beat)
 CELERY_BEAT_SCHEDULE = {
@@ -285,14 +302,16 @@ CELERY_BEAT_SCHEDULE = {
         "schedule": 60.0,
     },
     # Мониторинг heartbeat парсеров (каждые 2 минуты)
-    "check_parser_heartbeats_every_2_min": {
+    # Раз в 20 сек — дёшево (таблица из нескольких строк), зато позволяет
+    # backoff-лесенке реально достигать своих коротких ступеней (30с/60с).
+    "check_parser_heartbeats_every_20_sec": {
         "task": "agromash.check_parser_heartbeats",
-        "schedule": 120.0,
+        "schedule": 20.0,
     },
     # Автоматический перезапуск парсеров в статусе error (каждые 2 минуты)
-    "auto_restart_error_parsers_every_2_min": {
+    "auto_restart_error_parsers_every_20_sec": {
         "task": "agromash.auto_restart_error_parsers",
-        "schedule": 120.0,
+        "schedule": 20.0,
     },
 }
 
