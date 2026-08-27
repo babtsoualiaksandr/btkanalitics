@@ -19,6 +19,9 @@
       <div class="btk-header__right">
         <nav class="btk-nav">
           <a class="btk-nav__link" href="{% url 'events_list' %}">События</a>
+          {% if request.user.is_staff %}
+            <a class="btk-nav__link" href="{% url 'fuel_report_list' %}">Отчёты о заправках</a>
+          {% endif %}
           {% if request.user.username == 'admin' %}
             <a class="btk-nav__link" href="/admin/">Admin</a>
           {% endif %}
@@ -36,6 +39,13 @@
   </header>
 
   <main class="btk-main">
+    {% if messages %}
+      <ul class="btk-messages">
+        {% for message in messages %}
+          <li class="btk-messages__item btk-messages__item--{{ message.tags }}">{{ message }}</li>
+        {% endfor %}
+      </ul>
+    {% endif %}
     {% block content %}{% endblock %}
   </main>
 

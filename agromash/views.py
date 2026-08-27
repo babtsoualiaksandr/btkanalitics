@@ -188,6 +188,31 @@ def _active_tasks_worker_by_id(timeout_sec: float = 2.0) -> dict:
     return result
 
 
+def get_running_parsers_liveness() -> list:
+    """Живые (heartbeat не старше 2 мин) запущенные парсеры + реальный
+    воркер, на котором сейчас выполняется задача (см. _active_tasks_worker_by_id).
+
+    Публичная (без `_`) — переиспользуется и /admin/system-status/, и
+    страницей отчётов о заправках (agromash/views_fuel_report.py), без
+    тяжёлых systemd/redis/memory запросов, которые нужны только полной
+    странице диагностики.
+    """
+    active_task_workers = _active_tasks_worker_by_id()
+    hb_threshold = timezone.now() - timezone.timedelta(minutes=2)
+    running_parsers_qs = AccountVideoAnalytics.objects.filter(
+        parser_status=AccountVideoAnalytics.PARSER_STATUS_RUNNING
+    ).filter(Q(parser_heartbeat_at__isnull=True) | Q(parser_heartbeat_at__gte=hb_threshold))
+    running_parsers = list(running_parsers_qs.order_by("id"))
+    for acc in running_parsers:
+        worker_name = active_task_workers.get(acc.parser_task_id)
+        acc.current_worker = worker_name or "?"
+        # Ожидаем hostname вида "parser@ServerForIpCam" (см. --hostname в
+        # btkanalitics-celery-worker-parser.service). Если задача крутится
+        # на воркере с другим именем — это и есть рассинхрон маршрутизации.
+        acc.worker_mismatch = bool(worker_name) and not worker_name.startswith("parser@")
+    return running_parsers
+
+
 def _filter_log_lines(text: str, *, must_contain: list[str]) -> str:
     """Фильтрация логов по ключевым словам (все слова должны встретиться).
 
@@ -322,20 +347,7 @@ def _collect_system_status_context() -> dict:
         "text": misrouted_lines,
     }
 
-    # --- Запущенные парсеры (best-effort) + реальный воркер по task_id ---
-    active_task_workers = _active_tasks_worker_by_id()
-    hb_threshold = timezone.now() - timezone.timedelta(minutes=2)
-    running_parsers_qs = AccountVideoAnalytics.objects.filter(
-        parser_status=AccountVideoAnalytics.PARSER_STATUS_RUNNING
-    ).filter(Q(parser_heartbeat_at__isnull=True) | Q(parser_heartbeat_at__gte=hb_threshold))
-    running_parsers = list(running_parsers_qs.order_by("id"))
-    for acc in running_parsers:
-        worker_name = active_task_workers.get(acc.parser_task_id)
-        acc.current_worker = worker_name or "?"
-        # Ожидаем hostname вида "parser@ServerForIpCam" (см. --hostname в
-        # btkanalitics-celery-worker-parser.service). Если задача крутится
-        # на воркере с другим именем — это и есть рассинхрон маршрутизации.
-        acc.worker_mismatch = bool(worker_name) and not worker_name.startswith("parser@")
+    running_parsers = get_running_parsers_liveness()
 
     # Последние события Telegram / отчёты
     telegram_logs = list(

@@ -460,3 +460,16 @@ textarea.btk-textarea { resize: vertical; }
 /* Мелкие правки визуального баланса */
 .btk-card__header .btk-hint { margin-top: 2px; }
 .btk-col-actions { white-space: nowrap; }
+
+/* Django messages framework — общий блок для всех non-admin страниц */
+.btk-messages { list-style: none; margin: 0 0 16px; padding: 0; display: grid; gap: 8px; }
+.btk-messages__item {
+  padding: 10px 14px;
+  border-radius: 10px;
+  font-size: 14px;
+  border: 1px solid var(--btk-border);
+  background: var(--btk-card);
+}
+.btk-messages__item--success { border-color: #1f7a1f; color: #1f7a1f; }
+.btk-messages__item--error { border-color: var(--btk-danger); color: var(--btk-danger); }
+.btk-messages__item--warning { border-color: #7a5b1f; color: #7a5b1f; }

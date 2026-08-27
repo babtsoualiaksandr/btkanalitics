@@ -1,0 +1,359 @@
+{% extends "agromash/base_btk.html" %}
+
+{% block title %}Отчёты о заправках — BTK Analitics{% endblock %}
+
+{% block content %}
+<div class="btk-container">
+
+  <section class="btk-card">
+    <div class="btk-card__header">
+      <h2 class="btk-h2">Загрузить новый отчёт</h2>
+    </div>
+    <form class="btk-form" method="post" enctype="multipart/form-data" action="{% url 'fuel_report_upload' %}">
+      {% csrf_token %}
+      <div class="btk-field">
+        <label class="btk-label" for="id_xlsx_file">XLSX файл</label>
+        {{ import_form.xlsx_file }}
+        <div class="btk-hint">Пооперационный отчёт по заправкам (как выгружается из системы АЗС).</div>
+      </div>
+      <div class="btk-field">
+        <label class="btk-label" for="id_period_start">Период с</label>
+        {{ import_form.period_start }}
+      </div>
+      <div class="btk-field">
+        <label class="btk-label" for="id_period_end">Период по</label>
+        {{ import_form.period_end }}
+        <div class="btk-hint">Период необязателен — если не указан, анализ возьмёт границы по датам самих операций.</div>
+      </div>
+      <div class="btk-actions">
+        <button class="btk-btn" type="submit">Загрузить</button>
+      </div>
+    </form>
+  </section>
+
+  <section class="btk-card">
+    <div class="btk-card__header">
+      <h2 class="btk-h2">История отчётов</h2>
+    </div>
+    <div class="btk-tablewrap">
+      <table class="btk-table">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Загружен</th>
+            <th>Контракт</th>
+            <th>Организация</th>
+            <th>Период</th>
+            <th>Строк</th>
+            <th>Анализ</th>
+            <th>Отчёт</th>
+            <th>Отправка</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in reports %}
+            <tr>
+              <td>{{ r.id }}</td>
+              <td>{{ r.created_at|date:"Y-m-d H:i" }}</td>
+              <td>{{ r.contract_number|default:"—" }}</td>
+              <td>{{ r.organization_name|default:"—" }}</td>
+              <td>{{ r.period_start|default:"—" }} — {{ r.period_end|default:"—" }}</td>
+              <td>
+                {{ r.rows_count }}
+                {% if not r.imported_ok %}<span class="btk-muted" style="color:var(--btk-danger);">(с ошибками)</span>{% endif %}
+              </td>
+
+              {# --- Анализ --- #}
+              <td class="btk-col-actions">
+                {% if r.analysis_status == 'pending' %}
+                  <div class="js-task-poll" data-report-id="{{ r.id }}" data-task-id="{{ r.analysis_task_id }}" data-task-type="analysis">
+                    <button class="btk-btn btk-btn--small btk-btn--ghost" type="button" disabled>
+                      <span class="js-task-label">Анализ…</span>
+                    </button>
+                    <div class="btk-hint js-task-hint">в очереди</div>
+                  </div>
+                {% elif r.analysis_status == 'done' %}
+                  <form method="post" action="{% url 'fuel_report_analyze' r.id %}">
+                    {% csrf_token %}
+                    <button class="btk-btn btk-btn--small btk-btn--ghost" type="submit"
+                      onclick="return confirm('Перезапустить анализ? Текущий результат будет заменён.');">Перезапустить</button>
+                  </form>
+                  <div class="btk-hint">✅ {% if r.analysis_finished_at %}{{ r.analysis_finished_at|date:"H:i:s" }}{% else %}готово{% endif %}</div>
+                {% elif r.analysis_status == 'error' %}
+                  <form method="post" action="{% url 'fuel_report_analyze' r.id %}">
+                    {% csrf_token %}
+                    <button class="btk-btn btk-btn--small btk-btn--danger" type="submit"
+                      onclick="return confirm('Повторить анализ после ошибки?');">Повторить</button>
+                  </form>
+                  <div class="btk-hint" style="color:var(--btk-danger);">❌ ошибка</div>
+                {% else %}
+                  <form method="post" action="{% url 'fuel_report_analyze' r.id %}">
+                    {% csrf_token %}
+                    <button class="btk-btn btk-btn--small" type="submit">Запустить</button>
+                  </form>
+                {% endif %}
+              </td>
+
+              {# --- Отчёт (экспорт XLSX) --- #}
+              <td class="btk-col-actions">
+                {% if r.export_xlsx_status == 'ready' %}
+                  <a class="btk-btn btk-btn--small btk-btn--xlsx" href="{% url 'fuel_report_download' r.id %}">Скачать XLSX</a>
+                  <button class="btk-btn btk-btn--small btk-btn--ghost js-fuelreport-enqueue" type="button" data-report-id="{{ r.id }}">Пересоздать…</button>
+                  <div class="btk-hint">готово</div>
+                {% elif r.export_xlsx_status == 'pending' %}
+                  <div class="js-task-poll" data-report-id="{{ r.id }}" data-task-id="{{ r.export_xlsx_task_id }}" data-task-type="export">
+                    <button class="btk-btn btk-btn--small btk-btn--ghost" type="button" disabled>
+                      <span class="js-task-label">Генерация…</span>
+                    </button>
+                    <div class="btk-hint js-task-hint">в очереди</div>
+                  </div>
+                {% else %}
+                  <button class="btk-btn btk-btn--small btk-btn--ghost js-fuelreport-enqueue" type="button" data-report-id="{{ r.id }}">Сформировать XLSX</button>
+                  {% if r.export_xlsx_status == 'error' %}<div class="btk-hint" style="color:var(--btk-danger);">ошибка</div>{% endif %}
+                {% endif %}
+              </td>
+
+              {# --- Отправка --- #}
+              <td class="btk-col-actions">
+                <button class="btk-btn btk-btn--small btk-btn--ghost js-fuelreport-send" type="button" data-report-id="{{ r.id }}">Отправить…</button>
+              </td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="9" class="btk-muted">Пока нет загруженных отчётов.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="btk-card">
+    <div class="btk-card__header">
+      <h2 class="btk-h2">Живучесть парсеров</h2>
+      <div class="btk-hint"><a class="btk-thlink" href="{% url 'admin_system_status' %}">Подробная диагностика →</a></div>
+    </div>
+    <div class="btk-tablewrap">
+      <table class="btk-table">
+        <thead>
+          <tr>
+            <th>Аккаунт</th>
+            <th>Организация</th>
+            <th>Статус</th>
+            <th>Воркер</th>
+            <th>Heartbeat</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for a in running_parsers %}
+            <tr {% if a.worker_mismatch %}style="background:#fdecea;"{% endif %}>
+              <td>{{ a.name }}</td>
+              <td>{{ a.organization }}</td>
+              <td>{{ a.parser_status }}</td>
+              <td><code>{{ a.current_worker }}</code>{% if a.worker_mismatch %} ⚠️{% endif %}</td>
+              <td>{{ a.parser_heartbeat_at|date:"Y-m-d H:i:s" }}</td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="5" class="btk-muted">Нет запущенных парсеров.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+</div>
+
+<dialog class="btk-dialog" id="fuelreport-send-dialog">
+  <div class="btk-dialog__header">
+    <div class="btk-dialog__title" id="fuelreport-send-title">Отправить XLSX</div>
+    <button class="btk-btn btk-btn--ghost btk-btn--small" type="button" id="fuelreport-send-cancel">Закрыть</button>
+  </div>
+  <div class="btk-dialog__body">
+    <form class="btk-form" id="fuelreport-send-form" method="post">
+      {% csrf_token %}
+      <p class="btk-hint">
+        Для каждого выбранного подписчика: в Telegram уйдёт документ (если есть chat_id),
+        на email — письмо с вложением (если заполнен email).
+      </p>
+
+      <details class="btk-details" open>
+        <summary>Поля в отчёте</summary>
+        <div class="btk-checkboxes">
+          {% for c in xlsx_columns %}
+            <label class="btk-checkbox">
+              <input type="checkbox" name="columns" value="{{ c.key }}" {% if c.default %}checked{% endif %} />
+              <span>{{ c.label }}</span>
+            </label>
+          {% endfor %}
+        </div>
+      </details>
+
+      <details class="btk-details" open>
+        <summary>Получатели</summary>
+        <div class="btk-checkboxes">
+          {% for s in telegram_subscribers %}
+            <label class="btk-checkbox">
+              <input type="checkbox" name="subscriber_ids" value="{{ s.id }}" />
+              <span>{{ s.username|default:"(без имени)" }} — chat_id={{ s.chat_id }}{% if s.email %}, email={{ s.email }}{% endif %}</span>
+            </label>
+          {% empty %}
+            <div class="btk-muted">Подписчиков пока нет.</div>
+          {% endfor %}
+        </div>
+      </details>
+
+      <div class="btk-actions">
+        <button class="btk-btn" type="submit">Отправить</button>
+      </div>
+    </form>
+  </div>
+</dialog>
+
+<dialog class="btk-dialog" id="fuelreport-enqueue-dialog">
+  <div class="btk-dialog__header">
+    <div class="btk-dialog__title" id="fuelreport-enqueue-title">Сформировать XLSX</div>
+    <button class="btk-btn btk-btn--ghost btk-btn--small" type="button" id="fuelreport-enqueue-cancel">Закрыть</button>
+  </div>
+  <div class="btk-dialog__body">
+    <form class="btk-form" id="fuelreport-enqueue-form" method="post">
+      {% csrf_token %}
+      <details class="btk-details" open>
+        <summary>Поля в отчёте</summary>
+        <div class="btk-checkboxes">
+          {% for c in xlsx_columns %}
+            <label class="btk-checkbox">
+              <input type="checkbox" name="columns" value="{{ c.key }}" {% if c.default %}checked{% endif %} />
+              <span>{{ c.label }}</span>
+            </label>
+          {% endfor %}
+        </div>
+      </details>
+      <div class="btk-actions">
+        <button class="btk-btn" type="submit">Сформировать</button>
+      </div>
+    </form>
+  </div>
+</dialog>
+{% endblock %}
+
+{% block scripts %}
+<style>
+  @keyframes fr-task-spin { to { transform: rotate(360deg); } }
+  .js-task-poll .js-task-label::before {
+    content: '';
+    display: inline-block;
+    width: 10px; height: 10px;
+    border: 2px solid #ccc;
+    border-top-color: var(--btk-blue);
+    border-radius: 50%;
+    animation: fr-task-spin 0.8s linear infinite;
+    margin-right: 6px;
+    vertical-align: middle;
+  }
+  .js-task-done .js-task-label::before { display: none; }
+</style>
+<script>
+  (function () {
+    const dlg = document.getElementById('fuelreport-send-dialog');
+    const form = document.getElementById('fuelreport-send-form');
+    const title = document.getElementById('fuelreport-send-title');
+    const btnCancel = document.getElementById('fuelreport-send-cancel');
+
+    const dlgEnq = document.getElementById('fuelreport-enqueue-dialog');
+    const formEnq = document.getElementById('fuelreport-enqueue-form');
+    const titleEnq = document.getElementById('fuelreport-enqueue-title');
+    const btnCancelEnq = document.getElementById('fuelreport-enqueue-cancel');
+
+    function sendUrl(reportId) {
+      return `/agromash/fuel-reports/${reportId}/send/`;
+    }
+    function exportUrl(reportId) {
+      return `/agromash/fuel-reports/${reportId}/export/`;
+    }
+
+    document.addEventListener('click', function (e) {
+      const btn = e.target.closest('.js-fuelreport-send');
+      if (!btn) return;
+      e.preventDefault();
+      const reportId = btn.getAttribute('data-report-id');
+      form.action = sendUrl(reportId);
+      title.textContent = 'Отправить XLSX (отчёт #' + reportId + ')';
+      if (dlg && typeof dlg.showModal === 'function') dlg.showModal();
+    });
+
+    document.addEventListener('click', function (e) {
+      const btn = e.target.closest('.js-fuelreport-enqueue');
+      if (!btn) return;
+      e.preventDefault();
+      const reportId = btn.getAttribute('data-report-id');
+      formEnq.action = exportUrl(reportId);
+      titleEnq.textContent = 'Сформировать XLSX (отчёт #' + reportId + ')';
+      if (dlgEnq && typeof dlgEnq.showModal === 'function') dlgEnq.showModal();
+    });
+
+    if (btnCancel) btnCancel.addEventListener('click', function () { if (dlg) dlg.close(); });
+    if (btnCancelEnq) btnCancelEnq.addEventListener('click', function () { if (dlgEnq) dlgEnq.close(); });
+  })();
+
+  (function () {
+    const POLL_INTERVAL_MS = 2500;
+    const TASK_STATUS_URL = '{% url "admin_task_status" %}';
+
+    function pollTaskStatus(el) {
+      const reportId = el.getAttribute('data-report-id');
+      const taskId = el.getAttribute('data-task-id');
+      const taskType = el.getAttribute('data-task-type');
+      const labelEl = el.querySelector('.js-task-label');
+      const hintEl = el.querySelector('.js-task-hint');
+      if (!reportId) return;
+
+      const params = new URLSearchParams();
+      if (taskId) params.set('task_id', taskId);
+      params.set('report_id', reportId);
+      const url = TASK_STATUS_URL + '?' + params.toString();
+
+      const interval = setInterval(async function () {
+        try {
+          const resp = await fetch(url);
+          if (!resp.ok) return;
+          const data = await resp.json();
+          const report = data.report || {};
+
+          let modelStatus = '';
+          if (taskType === 'analysis') modelStatus = report.analysis_status || '';
+          else if (taskType === 'export') modelStatus = report.export_xlsx_status || '';
+
+          let finished = false, success = false, errorText = '';
+          if (taskType === 'analysis') {
+            if (modelStatus === 'done') { finished = true; success = true; }
+            if (modelStatus === 'error') { finished = true; errorText = report.analysis_error || 'ошибка'; }
+          } else if (taskType === 'export') {
+            if (modelStatus === 'ready') { finished = true; success = true; }
+            if (modelStatus === 'error') { finished = true; errorText = report.export_xlsx_error || 'ошибка'; }
+          }
+          if (!finished && data.ready) {
+            finished = true;
+            success = !!data.successful;
+            if (!success) errorText = data.error || 'ошибка';
+          }
+
+          if (finished) {
+            clearInterval(interval);
+            el.classList.add('js-task-done');
+            if (success) {
+              if (labelEl) labelEl.textContent = '✅ Готово';
+              if (hintEl) hintEl.textContent = 'обновите страницу';
+              setTimeout(function () { location.reload(); }, 1500);
+            } else {
+              if (labelEl) labelEl.textContent = '❌ Ошибка';
+              if (hintEl) { hintEl.style.color = 'var(--btk-danger)'; hintEl.textContent = errorText.substring(0, 80) || 'ошибка'; }
+            }
+          }
+        } catch (e) {
+          console.error('Task poll error:', e);
+        }
+      }, POLL_INTERVAL_MS);
+    }
+
+    document.querySelectorAll('.js-task-poll').forEach(pollTaskStatus);
+  })();
+</script>
+{% endblock %}
