@@ -215,7 +215,22 @@ def run_parse_event(
             logger.exception("Failed to update status on SIGTERM")
         # Не вызываем sys.exit() — пусть процесс завершится естественно
     
-    signal.signal(signal.SIGTERM, _handle_sigterm)
+    try:
+        signal.signal(signal.SIGTERM, _handle_sigterm)
+    except ValueError:
+        # signal.signal() работает только в главном потоке процесса.
+        # Под пулом потоков Celery (--pool=threads, очередь parser)
+        # таска выполняется в дочернем потоке — регистрация обработчика
+        # невозможна, graceful-обновление статуса на SIGTERM просто не
+        # сработает. Это компенсируется heartbeat/auto-restart
+        # (agromash/tasks_monitoring.py), которые и так переживают любое
+        # завершение процесса, включая SIGKILL.
+        logger.debug(
+            "Не удалось зарегистрировать SIGTERM-обработчик (не главный поток) "
+            "account_id=%s task_id=%s",
+            account_id,
+            task_id,
+        )
 
     client = VAApiClient(account_id=account_id, base_url=ctx.base_url)
     last_stop_check = 0.0

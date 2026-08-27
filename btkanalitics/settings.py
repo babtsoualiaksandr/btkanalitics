@@ -243,6 +243,17 @@ CELERY_TASK_ANNOTATIONS = {
     },
 }
 
+# «Вечные» SSE-парсер-задачи изолированы в отдельную очередь `parser`,
+# которую слушает отдельный воркер на пуле потоков (--pool=threads), а не
+# стандартный prefork-воркер (см. deploy/systemd/btkanalitics-celery-worker-parser.service).
+# Раньше эти задачи навсегда занимали слоты обычного prefork-воркера
+# (concurrency = nproc), из-за чего короткие задачи (отчёты, анализ,
+# heartbeat) конкурировали с ними за те же слоты — это и было основной
+# причиной роста RSS и аккаунтов, зависающих в статусе "starting".
+CELERY_TASK_ROUTES = {
+    "agromash.parse_event": {"queue": "parser"},
+}
+
 # -----------------
 # VA SSE Parser settings
 # -----------------

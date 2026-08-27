@@ -1,0 +1,35 @@
+[Unit]
+Description=btkanalitics Celery worker (очередь parser, вечные SSE-задачи, пул потоков)
+PartOf=btkanalitics.target
+After=network.target
+OnFailure=btkanalitics-alert@%n.service
+
+[Service]
+Type=simple
+User=sshbeltelecom
+WorkingDirectory=/home/sshbeltelecom/va/btkanalitics
+EnvironmentFile=/home/sshbeltelecom/va/btkanalitics/.env
+
+# --pool=threads: SSE-парсер держит "вечное" (без time limit) сетевое
+# соединение на аккаунт. Под prefork (обычный воркер) каждое такое
+# соединение постоянно занимает целый форкнутый процесс — источник
+# роста RSS и нехватки слотов для коротких задач (см. CELERY_TASK_ROUTES
+# в settings.py). Поток намного дешевле процесса для I/O-bound ожидания
+# на сетевом сокете.
+#
+# --concurrency=16: с запасом на рост числа аккаунтов сверх текущих 7.
+#
+# worker_max_memory_per_child здесь неприменим (один процесс, много
+# потоков) — коарс-предохранитель на случай медленной утечки в самом
+# процессе: MemoryMax= ниже + Restart=always.
+ExecStart=/usr/bin/env bash -lc '/home/sshbeltelecom/va/venv/bin/celery -A btkanalitics worker -l info -Q parser --pool=threads --concurrency=16 --hostname=parser@%%h'
+
+MemoryMax=1500M
+
+Restart=always
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=60
+
+[Install]
+WantedBy=btkanalitics.target
