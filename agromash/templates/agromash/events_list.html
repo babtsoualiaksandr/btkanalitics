@@ -2,11 +2,58 @@
 
 {% block title %}События — BTK Analitics{% endblock %}
 
+{% block extra_head %}
+<style>
+  #caseDialog { width: min(920px, calc(100vw - 24px)); }
+</style>
+{% endblock %}
+
 {% block content %}
-  <div class="btk-container">
-    <h1 class="btk-h1">События</h1>
+  <div class="btk-container btk-modern">
+
+    <section class="btk-hero">
+      <div class="btk-hero__glow" aria-hidden="true"></div>
+      <svg class="btk-hero__icon" viewBox="0 0 72 96" fill="none" aria-hidden="true">
+        <rect x="4" y="30" width="46" height="30" rx="6" fill="currentColor" opacity="0.9"/>
+        <circle cx="27" cy="45" r="11" fill="#0a1a2b" opacity="0.55"/>
+        <circle cx="27" cy="45" r="5" fill="currentColor"/>
+        <rect x="44" y="24" width="10" height="10" rx="2" fill="currentColor"/>
+        <path d="M50 40h12a4 4 0 0 1 4 4v8a4 4 0 0 1-4 4H50" stroke="currentColor" stroke-width="4" stroke-linecap="round"/>
+        <path d="M14 30v-6a10 10 0 0 1 10-10h6" stroke="currentColor" stroke-width="4" stroke-linecap="round"/>
+      </svg>
+      <div class="btk-hero__body">
+        <span class="btk-hero__eyebrow">📹 Видеоаналитика</span>
+        <h1 class="btk-hero__title">События и тревоги</h1>
+        <p class="btk-hero__subtitle">
+          Сработки распознавания номеров по назначенным вам камерам — фильтруйте по времени,
+          разбирайте карточки событий и выгружайте отчёт в Excel.
+        </p>
+        <div class="btk-hero__stats">
+          <div class="btk-stat">
+            <div class="btk-stat__value">{{ alarms|length }}</div>
+            <div class="btk-stat__label">Показано событий</div>
+          </div>
+          <div class="btk-stat">
+            <div class="btk-stat__value">{{ limit_value }}</div>
+            <div class="btk-stat__label">Лимит выдачи</div>
+          </div>
+          <div class="btk-stat">
+            <div class="btk-stat__value">{{ form.monitors.field.queryset.count }}</div>
+            <div class="btk-stat__label">Доступно камер</div>
+          </div>
+        </div>
+      </div>
+    </section>
 
     <section class="btk-card">
+      <div class="btk-card__header">
+        <h2 class="btk-h2">
+          <span class="btk-h2__icon">
+            <svg class="btk-icon" style="width:16px;height:16px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 3H2l8 9.46V19l4 2v-8.54z"/></svg>
+          </span>
+          Фильтры
+        </h2>
+      </div>
       <form class="btk-form js-alarm-filters" method="get" action="">
         {# Строка с датами и лимитом #}
         <div class="btk-filter-row">
@@ -47,7 +94,12 @@
 
     <section class="btk-card">
       <div class="btk-card__header">
-        <h2 class="btk-h2">Экспорт</h2>
+        <h2 class="btk-h2">
+          <span class="btk-h2__icon">
+            <svg class="btk-icon" style="width:16px;height:16px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
+          </span>
+          Экспорт
+        </h2>
       </div>
 
       <form class="btk-form js-export-form" method="get" action="{% url 'events_export_xlsx' %}">
@@ -74,7 +126,12 @@
 
     <section class="btk-card">
       <div class="btk-card__header">
-        <h2 class="btk-h2">Список событий</h2>
+        <h2 class="btk-h2">
+          <span class="btk-h2__icon">
+            <svg class="btk-icon" style="width:16px;height:16px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18"/><path d="M8 4v3"/><path d="M16 4v3"/></svg>
+          </span>
+          Список событий
+        </h2>
         <div class="btk-hint">Показано до {{ limit_value }} записей.</div>
       </div>
 
