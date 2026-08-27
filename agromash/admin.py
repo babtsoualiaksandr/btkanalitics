@@ -203,12 +203,11 @@ parse_event_action.short_description = "Run parse_event for selected accounts"
 class AccountVideoAnalyticsAdmin(admin.ModelAdmin):
     list_display = (
         'name',
-        'password',
         'organization',
         'contract',
         'parser_status_badge',
     )
-    search_fields = ('name', 'password', 'organization', 'contract')
+    search_fields = ('name', 'organization', 'contract')
     actions = [parse_event_action]
 
     def get_list_display(self, request):
