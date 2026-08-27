@@ -10,12 +10,7 @@ from django.utils import timezone
 from django.utils.html import format_html
 
 from ..models import FuelOperation, FuelReport, TelegramSubscriber
-from ..tasks import (
-    analyze_fuel_report_task,
-    generate_fuel_report_xlsx_cache,
-    is_task_active,
-    send_fuel_report_xlsx_to_subscribers,
-)
+from ..services.fuel_report_actions import send_to_subscribers, start_analysis, start_export
 from ..services.fuel_report_exporter import FUEL_REPORT_XLSX_COLUMNS
 from ..services.fuel_report_importer import FuelImportError, import_fuel_report_from_xlsx
 
@@ -196,15 +191,10 @@ class FuelReportAdmin(admin.ModelAdmin):
             raise Http404("FuelReport not found")
 
         try:
-            async_res = analyze_fuel_report_task.delay(report.id, source="admin")
-            FuelReport.objects.filter(pk=report.id).update(
-                analysis_status=FuelReport.ANALYSIS_STATUS_PENDING,
-                analysis_task_id=str(async_res.id),
-                analysis_error="",
-            )
+            start_analysis(report, source="admin")
             self.message_user(
                 request,
-                f"Анализ поставлен в очередь Celery (report_id={report.id}, task_id={async_res.id})",
+                f"Анализ поставлен в очередь Celery (report_id={report.id})",
                 level=messages.SUCCESS,
             )
         except Exception:
@@ -263,35 +253,25 @@ class FuelReportAdmin(admin.ModelAdmin):
         if report is None:
             raise Http404("FuelReport not found")
 
-        # Если уже есть активная таска — не плодим дубликаты
-        task_id = str(getattr(report, "export_xlsx_task_id", "") or "").strip()
-        if task_id and is_task_active(task_id):
-            self.message_user(
-                request,
-                f"XLSX уже формируется (task_id={task_id})",
-                level=messages.WARNING,
-            )
-            return redirect(request.META.get("HTTP_REFERER") or reverse("admin:agromash_fuelreport_changelist"))
-
         columns = request.POST.getlist("columns")
         try:
-            async_res = generate_fuel_report_xlsx_cache.delay(report.id, columns, source="admin")
+            started = start_export(report, columns=columns, source="admin")
         except Exception:
             logger.exception("Failed to enqueue generate_fuel_report_xlsx_cache (report_id=%s)", report.id)
             self.message_user(request, "Не удалось поставить задачу в очередь Celery — см. логи", level=messages.ERROR)
             return redirect(request.META.get("HTTP_REFERER") or reverse("admin:agromash_fuelreport_changelist"))
 
-        FuelReport.objects.filter(pk=report.id).update(
-            export_xlsx_status=FuelReport.EXPORT_STATUS_PENDING,
-            export_xlsx_task_id=async_res.id,
-            export_xlsx_error="",
-            export_xlsx_content=None,
-            export_xlsx_generated_at=None,
-        )
+        if not started:
+            self.message_user(
+                request,
+                f"XLSX уже формируется (task_id={report.export_xlsx_task_id})",
+                level=messages.WARNING,
+            )
+            return redirect(request.META.get("HTTP_REFERER") or reverse("admin:agromash_fuelreport_changelist"))
 
         self.message_user(
             request,
-            f"Формирование XLSX поставлено в очередь Celery (report_id={report.id}, task_id={async_res.id})",
+            f"Формирование XLSX поставлено в очередь Celery (report_id={report.id})",
             level=messages.SUCCESS,
         )
         return redirect(request.META.get("HTTP_REFERER") or reverse("admin:agromash_fuelreport_changelist"))
@@ -329,10 +309,10 @@ class FuelReportAdmin(admin.ModelAdmin):
         columns = request.POST.getlist("columns")
 
         try:
-            async_res = send_fuel_report_xlsx_to_subscribers.delay(report.id, subscriber_ids, columns, source="admin")
+            send_to_subscribers(report, subscriber_ids=subscriber_ids, columns=columns, source="admin")
             self.message_user(
                 request,
-                f"Отправка XLSX поставлена в очередь Celery (report_id={report.id}, task_id={async_res.id})",
+                f"Отправка XLSX поставлена в очередь Celery (report_id={report.id})",
                 level=messages.SUCCESS,
             )
         except Exception:
