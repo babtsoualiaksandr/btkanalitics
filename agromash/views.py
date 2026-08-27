@@ -36,6 +36,25 @@ def _assert_events_access(user) -> None:
 from .va_api_client import VAApiClient
 
 
+@staff_member_required
+def debug_forwarded_headers(request):
+    """Временный диагностический endpoint для отладки ERR_TOO_MANY_REDIRECTS.
+
+    Удалить после того, как разберёмся, что реально приходит в
+    X-Forwarded-Proto на этом хопе прокси-цепочки.
+    """
+    return JsonResponse({
+        "is_secure": request.is_secure(),
+        "get_host": request.get_host(),
+        "scheme": request.scheme,
+        "HTTP_X_FORWARDED_PROTO": request.META.get("HTTP_X_FORWARDED_PROTO"),
+        "HTTP_HOST": request.META.get("HTTP_HOST"),
+        "HTTP_X_FORWARDED_FOR": request.META.get("HTTP_X_FORWARDED_FOR"),
+        "SERVER_PORT": request.META.get("SERVER_PORT"),
+        "wsgi_url_scheme": request.META.get("wsgi.url_scheme"),
+    })
+
+
 def _to_aware_dt(value: int):
     """BigInteger epoch (sec or ms) -> aware datetime (UTC)."""
     if value is None:
