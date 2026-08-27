@@ -17,10 +17,55 @@
     .logbox { max-height: 320px; overflow: auto; }
     .tablebox { max-height: 340px; overflow: auto; border: 1px solid #ddd; border-radius: 8px; }
     .muted { color: #666; font-size: 12px; }
+    .warn-banner { background: #7a1f1f; color: #fff; padding: 12px 16px; border-radius: 8px; margin-bottom: 16px; }
+    .ok-banner { background: #1f5b2f; color: #fff; padding: 8px 16px; border-radius: 8px; margin-bottom: 16px; font-size: 13px; }
+    .stat-row { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 16px; }
+    .stat-card { border: 1px solid #ddd; border-radius: 8px; padding: 10px 14px; min-width: 160px; }
+    .stat-card .stat-label { font-size: 12px; color: #666; }
+    .stat-card .stat-value { font-size: 20px; font-weight: 600; }
+    .mismatch { background: #7a1f1f; color: #fff; }
   </style>
 </head>
 <body>
   <h1>System Status</h1>
+
+  {% if routing_check.has_misrouted %}
+    <div class="warn-banner">
+      ⚠️ Найдены строки <code>va_parser</code> в логе <code>{{ routing_check.unit }}</code> за {{ routing_check.window }}
+      ({{ routing_check.count }} шт.) — SSE-парсеры не должны туда попадать, они обязаны идти в очередь <code>parser</code>
+      (см. <code>btkanalitics-celery-worker-parser.service</code>). Возможен рассинхрон маршрутизации Celery.
+      <details style="margin-top:8px;">
+        <summary style="cursor:pointer;">Показать найденные строки</summary>
+        <pre class="logbox" style="margin-top:8px;">{{ routing_check.text }}</pre>
+      </details>
+    </div>
+  {% else %}
+    <div class="ok-banner">✅ Маршрутизация SSE-парсеров в порядке — записей <code>va_parser</code> в логе обычного воркера за {{ routing_check.window }} нет.</div>
+  {% endif %}
+
+  <h2>Ресурсы</h2>
+  <div class="stat-row">
+    <div class="stat-card">
+      <div class="stat-label">Память хоста</div>
+      <div class="stat-value">{{ host_memory.used_gb|default:"?" }} / {{ host_memory.total_gb|default:"?" }} ГБ</div>
+      <div class="muted">{{ host_memory.used_pct|default:"?" }}% занято, доступно {{ host_memory.available_gb|default:"?" }} ГБ</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Swap</div>
+      <div class="stat-value">{{ host_memory.swap_used_gb|default:"?" }} / {{ host_memory.swap_total_gb|default:"?" }} ГБ</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Очередь Redis: celery</div>
+      <div class="stat-value">{{ redis_queues.celery|default:"?" }}</div>
+      <div class="muted">короткие задачи (отчёты, heartbeat)</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Очередь Redis: parser</div>
+      <div class="stat-value">{{ redis_queues.parser|default:"?" }}</div>
+      <div class="muted">SSE-парсеры</div>
+    </div>
+  </div>
+  {% if redis_queues.error %}<div class="muted">Redis: {{ redis_queues.error }}</div>{% endif %}
 
   <h2>Systemd units</h2>
   <table>
@@ -30,6 +75,7 @@
         <th>ActiveState</th>
         <th>SubState</th>
         <th>UnitFileState</th>
+        <th>Память</th>
         <th>Ошибки (если есть)</th>
       </tr>
     </thead>
@@ -40,6 +86,7 @@
           <td>{{ u.ActiveState|default:"-" }}</td>
           <td>{{ u.SubState|default:"-" }}</td>
           <td>{{ u.UnitFileState|default:"-" }}</td>
+          <td>{% if u.memory_mb %}{{ u.memory_mb }} МБ{% else %}—{% endif %}</td>
           <td>{{ u.error|default:"" }}</td>
         </tr>
       {% endfor %}
@@ -47,28 +94,30 @@
   </table>
 
   <h2>Парсеры</h2>
-  <div class="muted">Запущенные парсеры определяются по `parser_status=running` и heartbeat не старше 2 минут.</div>
+  <div class="muted">Запущенные парсеры определяются по `parser_status=running` и heartbeat не старше 2 минут. «Воркер» — реальный узел Celery, который сейчас выполняет задачу (должен начинаться с <code>parser@</code>).</div>
   <table>
     <thead>
       <tr>
         <th>Account</th>
         <th>Организация</th>
         <th>Статус</th>
+        <th>Воркер</th>
         <th>Task ID</th>
         <th>Heartbeat</th>
       </tr>
     </thead>
     <tbody>
       {% for a in running_parsers %}
-        <tr>
+        <tr{% if a.worker_mismatch %} class="mismatch"{% endif %}>
           <td>{{ a.name }}</td>
           <td>{{ a.organization }}</td>
           <td>{{ a.parser_status }}</td>
+          <td><code>{{ a.current_worker }}</code>{% if a.worker_mismatch %} ⚠️{% endif %}</td>
           <td><code>{{ a.parser_task_id }}</code></td>
           <td>{{ a.parser_heartbeat_at|date:"Y-m-d H:i:s" }}</td>
         </tr>
       {% empty %}
-        <tr><td colspan="5">Нет запущенных парсеров</td></tr>
+        <tr><td colspan="6">Нет запущенных парсеров</td></tr>
       {% endfor %}
     </tbody>
   </table>
