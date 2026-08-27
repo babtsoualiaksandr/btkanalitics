@@ -31,6 +31,12 @@ DEBUG = config('DEBUG', default=False, cast=bool)
 ALLOWED_HOSTS = config('ALLOWED_HOSTS', default='').split(',')
 CSRF_TRUSTED_ORIGINS = config('CSRF_TRUSTED_ORIGINS', default='').split(',')
 BASE_URL = config('BASE_URL')
+
+# Хост, для которого форсируем HTTPS-редирект и Secure-флаг на куках
+# (см. btkanalitics.middleware.ConditionalHttpsMiddleware). Прямой LAN-доступ
+# (localhost, 10.0.0.2:9091 и т.п. из ALLOWED_HOSTS) продолжает работать
+# по обычному HTTP — эти хосты не попадают под харднинг.
+PUBLIC_HTTPS_HOST = config('PUBLIC_HTTPS_HOST', default='btkanylitics.babtsou.uk')
 TLG_BOT_TOKEN = config('TLG_BOT_TOKEN')
 TLG_CHAT_ID = config('TLG_CHAT_ID')
 TLG_CHAT_ID_ADMINS = [ x for x in config("TLG_CHAT_ID_ADMINS", default="").split(",") if x ]
@@ -66,6 +72,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'btkanalitics.middleware.ConditionalHttpsMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -80,17 +87,21 @@ MIDDLEWARE = [
 SECURE_CROSS_ORIGIN_OPENER_POLICY = None
 
 # Публичный домен обслуживается через Cloudflare (TLS терминируется на её
-# стороне), запрос доходит до Django через цепочку nginx:80 -> nginx:9091 ->
-# gunicorn:8091. Каждый хоп теперь пробрасывает исходный X-Forwarded-Proto
-# без перезаписи (см. deploy/nginx/btkanalitics.conf), поэтому здесь можно
-# доверять этому заголовку для request.is_secure().
+# стороне) и доходит до Django через трёххоповую цепочку:
+#   Cloudflare -> nginx:443 на 52.207.37.113 (хардкодит X-Forwarded-Proto: https)
+#   -> nginx:80 на 10.0.0.5 -> nginx:9091 на этом сервере -> gunicorn:8091.
+# Все хопы теперь пробрасывают X-Forwarded-Proto без перезаписи, поэтому
+# здесь можно доверять этому заголовку для request.is_secure(). Проверено
+# curl'ом end-to-end (302 на /accounts/login/, без петли редиректов).
 #
-# ВАЖНО: SECURE_SSL_REDIRECT / SESSION_COOKIE_SECURE / CSRF_COOKIE_SECURE
-# сознательно НЕ включены в этом же шаге — сначала нужно выкатить nginx
-# и убедиться curl'ом, что X-Forwarded-Proto действительно доходит до Django
-# как "https" для публичных запросов, иначе включение SECURE_SSL_REDIRECT
-# заранее приведёт к бесконечному редиректу.
+# SECURE_SSL_REDIRECT сознательно НЕ используется — вместо него
+# ConditionalHttpsMiddleware редиректит на HTTPS и форсирует Secure-флаг
+# на куках только для PUBLIC_HTTPS_HOST, т.к. http://10.0.0.2:9091 всё ещё
+# используется как прямой LAN-доступ в обход прокси-цепочки, и глобальный
+# SECURE_SSL_REDIRECT/COOKIE_SECURE сломал бы там логин.
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+SESSION_COOKIE_SECURE = True
+CSRF_COOKIE_SECURE = True
 
 ROOT_URLCONF = 'btkanalitics.urls'
 
