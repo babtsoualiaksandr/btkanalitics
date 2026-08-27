@@ -81,6 +81,22 @@
         История отчётов
       </h2>
     </div>
+
+    <form class="btk-filter-row btk-filter-row--compact" method="get" action="{% url 'fuel_report_list' %}">
+      <div class="btk-field">
+        <label class="btk-label">Загружен с</label>
+        <input class="btk-input" type="date" name="date_from" value="{{ date_from }}" />
+      </div>
+      <div class="btk-field">
+        <label class="btk-label">Загружен по</label>
+        <input class="btk-input" type="date" name="date_to" value="{{ date_to }}" />
+      </div>
+      <div class="btk-actions btk-actions--inline">
+        <button class="btk-btn btk-btn--small" type="submit">Применить</button>
+        <a class="btk-btn btk-btn--small btk-btn--ghost" href="{% url 'fuel_report_list' %}">Сбросить</a>
+      </div>
+    </form>
+
     <div class="btk-tablewrap">
       <table class="btk-table">
         <thead>
@@ -196,6 +212,22 @@
         </tbody>
       </table>
     </div>
+
+    {% if page_obj.paginator.num_pages > 1 %}
+      <div class="btk-pagination">
+        {% if page_obj.has_previous %}
+          <a class="btk-btn btk-btn--small btk-btn--ghost" href="{% querystring page=page_obj.previous_page_number %}">← Назад</a>
+        {% else %}
+          <span class="btk-btn btk-btn--small btk-btn--ghost btk-pagination__disabled">← Назад</span>
+        {% endif %}
+        <span class="btk-hint">Страница {{ page_obj.number }} из {{ page_obj.paginator.num_pages }} · всего {{ page_obj.paginator.count }}</span>
+        {% if page_obj.has_next %}
+          <a class="btk-btn btk-btn--small btk-btn--ghost" href="{% querystring page=page_obj.next_page_number %}">Вперёд →</a>
+        {% else %}
+          <span class="btk-btn btk-btn--small btk-btn--ghost btk-pagination__disabled">Вперёд →</span>
+        {% endif %}
+      </div>
+    {% endif %}
   </section>
 
   <section class="btk-card">

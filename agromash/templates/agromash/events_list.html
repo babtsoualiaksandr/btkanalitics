@@ -30,12 +30,12 @@
         </p>
         <div class="btk-hero__stats">
           <div class="btk-stat">
-            <div class="btk-stat__value">{{ alarms|length }}</div>
-            <div class="btk-stat__label">Показано событий</div>
+            <div class="btk-stat__value">{{ total_count }}</div>
+            <div class="btk-stat__label">Найдено событий</div>
           </div>
           <div class="btk-stat">
-            <div class="btk-stat__value">{{ limit_value }}</div>
-            <div class="btk-stat__label">Лимит выдачи</div>
+            <div class="btk-stat__value">{{ page }} / {{ total_pages }}</div>
+            <div class="btk-stat__label">Страница</div>
           </div>
           <div class="btk-stat">
             <div class="btk-stat__value">{{ form.monitors.field.queryset.count }}</div>
@@ -184,6 +184,22 @@
           </tbody>
         </table>
       </div>
+
+      {% if total_pages > 1 %}
+        <div class="btk-pagination" id="eventsPagination">
+          {% if page > 1 %}
+            <a class="btk-btn btk-btn--small btk-btn--ghost" href="{% querystring page=page|add:'-1' %}">← Назад</a>
+          {% else %}
+            <span class="btk-btn btk-btn--small btk-btn--ghost btk-pagination__disabled">← Назад</span>
+          {% endif %}
+          <span class="btk-hint">Страница {{ page }} из {{ total_pages }} · всего {{ total_count }}</span>
+          {% if page < total_pages %}
+            <a class="btk-btn btk-btn--small btk-btn--ghost" href="{% querystring page=page|add:'1' %}">Вперёд →</a>
+          {% else %}
+            <span class="btk-btn btk-btn--small btk-btn--ghost btk-pagination__disabled">Вперёд →</span>
+          {% endif %}
+        </div>
+      {% endif %}
     </section>
   </div>
 
@@ -251,9 +267,10 @@
     dlgBody.innerHTML = await resp.text();
   });
 
-  // Текущее состояние сортировки
+  // Текущее состояние сортировки/пагинации
   let currentSort = '{{ sort|default:"time" }}';
   let currentDir = '{{ dir|default:"desc" }}';
+  let currentPage = parseInt('{{ page|default:1 }}', 10) || 1;
 
   // Функция обновления таблицы через AJAX
   const tbodyEl = document.getElementById('alarmsTbody');
@@ -269,9 +286,10 @@
     // Собираем параметры из формы фильтров
     const params = new URLSearchParams();
 
-    // Добавляем сортировку
+    // Добавляем сортировку и текущую страницу
     params.set('sort', currentSort);
     params.set('dir', currentDir);
+    params.set('page', String(currentPage));
 
     // Добавляем фильтры из формы
     if (filtersForm instanceof HTMLFormElement) {
@@ -302,6 +320,7 @@
     const params = new URLSearchParams();
     params.set('sort', currentSort);
     params.set('dir', currentDir);
+    params.set('page', String(currentPage));
 
     if (filtersForm instanceof HTMLFormElement) {
       const fd = new FormData(filtersForm);
@@ -422,6 +441,7 @@
     function scheduleFilterRefresh() {
       if (filterTimeout) window.clearTimeout(filterTimeout);
       filterTimeout = window.setTimeout(() => {
+        currentPage = 1;
         refreshTableBody();
         updateBrowserUrl();
       }, 350);
@@ -447,6 +467,7 @@
     // Перехват submit формы — делаем AJAX вместо перезагрузки
     filtersForm.addEventListener('submit', (e) => {
       e.preventDefault();
+      currentPage = 1;
       refreshTableBody();
       updateBrowserUrl();
     });
@@ -469,6 +490,7 @@
     // Обновляем текущее состояние
     currentSort = newSort;
     currentDir = newDir;
+    currentPage = 1;
 
     // Обновляем индикаторы сортировки в заголовках
     const thead = table.querySelector('thead');
