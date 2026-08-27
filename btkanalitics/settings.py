@@ -24,6 +24,12 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = config('SECRET_KEY')
 
+# Отдельный от SECRET_KEY ключ для шифрования полей в БД (например,
+# AccountVideoAnalytics.password) — см. agromash/fields.py. Ротация
+# SECRET_KEY (разлогинивает пользователей) не должна одновременно
+# делать нечитаемыми уже зашифрованные данные в БД.
+FIELD_ENCRYPTION_KEY = config('FIELD_ENCRYPTION_KEY')
+
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = config('DEBUG', default=False, cast=bool)

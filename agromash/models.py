@@ -5,6 +5,7 @@ from django.db import models, transaction
 from django.contrib.auth.models import User
 from django.utils import timezone
 
+from agromash.fields import EncryptedCharField
 from agromash.services.telegram_client import send_message
 
 
@@ -121,7 +122,7 @@ class AccountVideoAnalyticsQuerySet(models.QuerySet):
 
 class AccountVideoAnalytics(models.Model):
     name = models.CharField(max_length=255, help_text="Account name")
-    password = models.CharField(max_length=255, help_text="Account password")
+    password = EncryptedCharField(max_length=500, help_text="Account password (зашифрован в БД)")
     contract = models.CharField(max_length=255, help_text="Contract number")
     organization = models.CharField(max_length=255, help_text="Organization name")
     access_token = models.TextField(null=True, blank=True)
