@@ -618,13 +618,13 @@
     const btnCancelOps = document.getElementById('fuelreport-operations-cancel');
 
     function sendUrl(reportId) {
-      return `/agromash/fuel-reports/${reportId}/send/`;
+      return `/fuel-reports/${reportId}/send/`;
     }
     function exportUrl(reportId) {
-      return `/agromash/fuel-reports/${reportId}/export/`;
+      return `/fuel-reports/${reportId}/export/`;
     }
     function operationsUrl(reportId) {
-      return `/agromash/fuel-reports/${reportId}/operations/`;
+      return `/fuel-reports/${reportId}/operations/`;
     }
 
     document.addEventListener('click', function (e) {

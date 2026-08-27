@@ -44,7 +44,7 @@ class AgromashConfig(AppConfig):
                 webapp_url = (
                     os.environ.get("TLG_WEBAPP_URL")
                     or getattr(settings, "TLG_WEBAPP_URL", None)
-                    or (f"{base_url}/agromash/tg/" if base_url else "")
+                    or (f"{base_url}/tg/" if base_url else "")
                 )
 
                 def _admin_chat_ids() -> set[int]:

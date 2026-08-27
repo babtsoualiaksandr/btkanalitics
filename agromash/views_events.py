@@ -722,7 +722,7 @@ def _export_columns(request: Optional[HttpRequest] = None) -> Dict[str, Tuple[st
 
     def _docs_urls(a: Alarm) -> str:
         docs = _docs(a)
-        rel = [f"/agromash/events/docs/{d.pk}/file/" for d in docs]
+        rel = [f"/events/docs/{d.pk}/file/" for d in docs]
         if request is not None:
             return "\n".join([request.build_absolute_uri(x) for x in rel])
         return "\n".join(rel)

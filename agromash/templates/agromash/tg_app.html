@@ -169,7 +169,7 @@
           setError('');
           status.textContent = 'Сохраняю…';
           try {
-            const data = await api(`/agromash/tg/api/subscriptions/${s.id}/update/`, {
+            const data = await api(`/tg/api/subscriptions/${s.id}/update/`, {
               email: email.value,
               frequency: freq.value,
               period_from_minutes: Number(pFrom.value),
@@ -198,7 +198,7 @@
           setError('');
           status.textContent = 'Ставлю в очередь…';
           try {
-            const data = await api(`/agromash/tg/api/subscriptions/${id}/send-now/`, {channel});
+            const data = await api(`/tg/api/subscriptions/${id}/send-now/`, {channel});
             status.textContent = `Поставлено в очередь: ${data.task_ids.join(', ')}`;
           } catch (e) {
             status.textContent = '';
@@ -226,7 +226,7 @@
           setError('');
           status.textContent = 'Ставлю диапазон в очередь…';
           try {
-            const data = await api(`/agromash/tg/api/subscriptions/${id}/send-range/`, {
+            const data = await api(`/tg/api/subscriptions/${id}/send-range/`, {
               channel,
               start: start.value,
               end: end.value,
@@ -283,8 +283,8 @@
         try {
           if (!initData) throw new Error('Telegram initData отсутствует (открывайте страницу внутри Telegram).');
           const [data, alarms] = await Promise.all([
-            api('/agromash/tg/api/subscriptions/'),
-            api('/agromash/tg/api/alarm-monitors/'),
+            api('/tg/api/subscriptions/'),
+            api('/tg/api/alarm-monitors/'),
           ]);
           const u = tg?.initDataUnsafe?.user;
           document.getElementById('me').textContent = u ? `@${u.username || ''} id=${u.id}` : '';
@@ -306,7 +306,7 @@
                 setError('');
                 btn.disabled = true;
                 try {
-                  const res = await api(`/agromash/tg/api/alarm-monitors/${m.monitor_pk}/set-enabled/`, {enabled: !m.enabled});
+                  const res = await api(`/tg/api/alarm-monitors/${m.monitor_pk}/set-enabled/`, {enabled: !m.enabled});
                   m.enabled = !!res.monitor?.enabled;
                   btn.className = 'btn ' + (m.enabled ? 'danger' : 'primary');
                   btn.textContent = m.enabled ? 'Выключить' : 'Включить';
