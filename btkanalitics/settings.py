@@ -79,6 +79,19 @@ MIDDLEWARE = [
 # Если проект будет обслуживаться по HTTPS — можно вернуть 'same-origin'.
 SECURE_CROSS_ORIGIN_OPENER_POLICY = None
 
+# Публичный домен обслуживается через Cloudflare (TLS терминируется на её
+# стороне), запрос доходит до Django через цепочку nginx:80 -> nginx:9091 ->
+# gunicorn:8091. Каждый хоп теперь пробрасывает исходный X-Forwarded-Proto
+# без перезаписи (см. deploy/nginx/btkanalitics.conf), поэтому здесь можно
+# доверять этому заголовку для request.is_secure().
+#
+# ВАЖНО: SECURE_SSL_REDIRECT / SESSION_COOKIE_SECURE / CSRF_COOKIE_SECURE
+# сознательно НЕ включены в этом же шаге — сначала нужно выкатить nginx
+# и убедиться curl'ом, что X-Forwarded-Proto действительно доходит до Django
+# как "https" для публичных запросов, иначе включение SECURE_SSL_REDIRECT
+# заранее приведёт к бесконечному редиректу.
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+
 ROOT_URLCONF = 'btkanalitics.urls'
 
 TEMPLATES = [
