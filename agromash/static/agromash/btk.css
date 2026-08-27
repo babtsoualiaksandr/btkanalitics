@@ -7,6 +7,14 @@
   --btk-muted: #556275;
   --btk-border: #d9e2ef;
   --btk-danger: #b71c1c;
+
+  /* Акценты для "модернизированных" (2026) страниц — .btk-modern */
+  --btk-navy: #0a1a2b;
+  --btk-navy-2: #123055;
+  --btk-navy-3: #1d4372;
+  --btk-amber: #ff9d2f;
+  --btk-amber-2: #ffc178;
+  --btk-teal: #33d1c8;
 }
 
 * { box-sizing: border-box; }
@@ -473,3 +481,257 @@ textarea.btk-textarea { resize: vertical; }
 .btk-messages__item--success { border-color: #1f7a1f; color: #1f7a1f; }
 .btk-messages__item--error { border-color: var(--btk-danger); color: var(--btk-danger); }
 .btk-messages__item--warning { border-color: #7a5b1f; color: #7a5b1f; }
+
+/* ==========================================================================
+   .btk-modern — общий "2026" визуальный апгрейд для отдельных страниц
+   (сейчас: /fuel-reports/, /events/). Применяется через обёртку
+   class="btk-container btk-modern" — не влияет на admin и остальные
+   страницы, использующие те же .btk-card/.btk-btn/... классы.
+   ========================================================================== */
+
+/* ---------- Hero ---------- */
+.btk-hero {
+  position: relative;
+  overflow: hidden;
+  border-radius: 24px;
+  padding: 36px 32px 28px;
+  margin: 4px 0 18px;
+  color: #fff;
+  background:
+    radial-gradient(900px 320px at 12% -20%, rgba(255, 157, 47, 0.35), transparent 60%),
+    radial-gradient(700px 280px at 92% 0%, rgba(51, 209, 200, 0.28), transparent 55%),
+    linear-gradient(165deg, var(--btk-navy) 0%, var(--btk-navy-2) 55%, var(--btk-navy-3) 100%);
+  box-shadow: 0 24px 60px -28px rgba(10, 26, 43, 0.65);
+}
+
+.btk-hero__glow {
+  position: absolute;
+  inset: 0;
+  background-image:
+    repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.5) 0 26px, transparent 26px 58px);
+  background-size: 58px 5px;
+  background-repeat: no-repeat;
+  background-position: -20px calc(100% - 22px);
+  width: 60%;
+  opacity: 0.28;
+  transform: skewX(-18deg);
+  pointer-events: none;
+}
+
+.btk-hero__icon {
+  position: absolute;
+  right: 26px;
+  bottom: -6px;
+  width: 108px;
+  height: auto;
+  opacity: 0.22;
+  color: var(--btk-amber-2);
+  pointer-events: none;
+}
+
+.btk-hero__body { position: relative; z-index: 1; }
+
+.btk-hero__eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  font-size: 11px;
+  font-weight: 800;
+  color: var(--btk-amber-2);
+}
+
+.btk-hero__title {
+  font-size: 30px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  margin: 8px 0 8px;
+  text-wrap: balance;
+}
+
+.btk-hero__subtitle {
+  max-width: 640px;
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.btk-hero__stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 28px;
+  margin-top: 26px;
+}
+
+.btk-stat__value {
+  font-size: 26px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.btk-stat__label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: rgba(255, 255, 255, 0.6);
+  margin-top: 2px;
+}
+
+@media (max-width: 640px) {
+  .btk-hero { padding: 26px 20px 22px; border-radius: 18px; }
+  .btk-hero__title { font-size: 24px; }
+  .btk-hero__icon { display: none; }
+}
+
+/* ---------- Cards ---------- */
+.btk-modern .btk-card {
+  border-radius: 18px;
+  border-color: rgba(10, 26, 43, 0.08);
+  box-shadow: 0 14px 34px -24px rgba(10, 26, 43, 0.35);
+}
+
+.btk-modern .btk-card__header { margin-bottom: 14px; }
+
+.btk-modern .btk-h2 {
+  font-weight: 800;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.btk-modern .btk-h2__icon {
+  display: inline-flex;
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, rgba(0, 114, 206, 0.14), rgba(51, 209, 200, 0.14));
+  color: var(--btk-blue-2);
+  flex: none;
+}
+
+/* ---------- Upload form: single-row panel ---------- */
+.btk-upload-form { display: grid; gap: 10px; }
+.btk-upload-row {
+  display: flex;
+  align-items: stretch;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.btk-file--grow { flex: 1 1 320px; }
+.btk-upload-submit { flex: none; white-space: nowrap; }
+
+/* ---------- File input ---------- */
+.btk-modern .btk-file {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border: 1.5px dashed var(--btk-border);
+  border-radius: 14px;
+  background: linear-gradient(180deg, #fbfcfe, #f5f8fc);
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.btk-modern .btk-file:focus-within,
+.btk-modern .btk-file:hover {
+  border-color: rgba(0, 114, 206, 0.5);
+  background: #fff;
+}
+.btk-modern .btk-file input[type="file"] {
+  font-size: 13px;
+  color: var(--btk-muted);
+}
+.btk-modern .btk-file input[type="file"]::file-selector-button {
+  appearance: none;
+  border: none;
+  border-radius: 50px;
+  padding: 8px 16px;
+  margin-right: 10px;
+  font-weight: 700;
+  font-size: 13px;
+  color: #fff;
+  background: linear-gradient(135deg, var(--btk-blue), var(--btk-navy-3));
+  cursor: pointer;
+  transition: filter 0.15s ease;
+}
+.btk-modern .btk-file input[type="file"]::file-selector-button:hover { filter: brightness(1.08); }
+
+/* ---------- Buttons: gradient / glow treatment ---------- */
+.btk-modern .btk-btn {
+  border: none;
+  background: linear-gradient(135deg, var(--btk-blue), var(--btk-navy-3));
+  box-shadow: 0 10px 22px -10px rgba(0, 114, 206, 0.6);
+}
+.btk-modern .btk-btn:hover {
+  background: linear-gradient(135deg, var(--btk-blue-2), var(--btk-navy-2));
+  box-shadow: 0 12px 26px -8px rgba(0, 114, 206, 0.7);
+}
+.btk-modern .btk-btn--ghost {
+  background: rgba(0, 114, 206, 0.06);
+  border: 1px solid rgba(0, 114, 206, 0.22);
+  color: var(--btk-blue-2);
+  box-shadow: none;
+}
+.btk-modern .btk-btn--ghost:hover {
+  background: rgba(0, 114, 206, 0.12);
+  box-shadow: 0 8px 18px -10px rgba(0, 114, 206, 0.35);
+}
+.btk-modern .btk-btn--danger {
+  background: linear-gradient(135deg, #e0453a, #a01515);
+  box-shadow: 0 10px 22px -10px rgba(160, 21, 21, 0.55);
+}
+.btk-modern .btk-btn--danger:hover { background: linear-gradient(135deg, #c8362c, #8c1212); }
+.btk-modern .btk-btn--xlsx {
+  background: linear-gradient(135deg, #24a35d, #12703c);
+  box-shadow: 0 10px 22px -10px rgba(18, 112, 60, 0.55);
+}
+.btk-modern .btk-btn--xlsx:hover { background: linear-gradient(135deg, #1f8f51, #0f5f33); }
+
+.btk-icon {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  vertical-align: -2px;
+}
+
+/* ---------- Status chips ---------- */
+.btk-modern .btk-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: 50px;
+  font-size: 12px;
+  font-weight: 700;
+}
+.btk-modern .btk-status::before {
+  content: '';
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.btk-modern .btk-status--ok { color: #157a3d; background: rgba(21, 122, 61, 0.1); }
+.btk-modern .btk-status--warn { color: #a15c00; background: rgba(161, 92, 0, 0.1); }
+.btk-modern .btk-status--bad { color: var(--btk-danger); background: rgba(183, 28, 28, 0.08); }
+
+.btk-modern tr.btk-row--mismatch { background: rgba(183, 28, 28, 0.05); }
+
+/* ---------- Progress bar ---------- */
+.btk-progress {
+  width: 108px;
+  height: 6px;
+  border-radius: 4px;
+  background: rgba(0, 114, 206, 0.12);
+  overflow: hidden;
+  margin-top: 5px;
+}
+.btk-progress__bar {
+  height: 100%;
+  width: 0%;
+  border-radius: 4px;
+  background: linear-gradient(90deg, var(--btk-blue), var(--btk-teal));
+  transition: width 0.4s ease;
+}
