@@ -29,7 +29,12 @@ MemoryMax=1500M
 Restart=always
 RestartSec=5
 KillSignal=SIGTERM
-TimeoutStopSec=60
+# Раньше 60 — но наши "вечные" SSE-петли (--pool=threads) всё равно не
+# реагируют на кооперативную остановку пула, полный таймаут всегда
+# расходовался впустую. Теперь состояние аккаунтов фиксируется мгновенно
+# через celery.signals.worker_shutting_down (см. btkanalitics/celery.py) —
+# ждать долго уже незачем, коротким TimeoutStopSec просто ускоряем SIGKILL.
+TimeoutStopSec=10
 
 [Install]
 WantedBy=btkanalitics.target
