@@ -9,7 +9,14 @@ User=sshbeltelecom
 WorkingDirectory=/home/sshbeltelecom/va/btkanalitics
 EnvironmentFile=/home/sshbeltelecom/va/btkanalitics/.env
 
-ExecStart=/usr/bin/env bash -lc '/home/sshbeltelecom/va/venv/bin/celery -A btkanalitics worker -l info'
+# --max-tasks-per-child/--max-memory-per-child: временная заглушка перед
+# архитектурным фиксом SSE-парсеров (см. Фазу 3 плана рефакторинга) —
+# сейчас воркеры не пересоздаются вообще, кроме как по краху, и на хосте
+# уже мало свободной памяти. 300MB — грубый потолок на процесс; для
+# "вечных" SSE-задач это тоже сработает как аварийный предохранитель
+# (celery убьёт и пересоздаст процесс, если он раздуется), реконнект
+# аккаунта подхватит auto_restart_error_parsers.
+ExecStart=/usr/bin/env bash -lc '/home/sshbeltelecom/va/venv/bin/celery -A btkanalitics worker -l info --max-tasks-per-child=100 --max-memory-per-child=300000'
 
 Restart=always
 RestartSec=5
