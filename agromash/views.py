@@ -61,6 +61,8 @@ def _systemd_unit_state(unit: str) -> dict:
             "SubState",
             "-p",
             "UnitFileState",
+            "-p",
+            "MemoryCurrent",
         ],
         timeout_sec=3,
     )
@@ -72,10 +74,22 @@ def _systemd_unit_state(unit: str) -> dict:
         if "=" in line:
             k, v = line.split("=", 1)
             data[k] = v
+
+    # MemoryCurrent приходит в байтах (или "[not set]"/"18446744073709551615"
+    # для юнитов без cgroup-учёта памяти) — сразу конвертируем в МБ для шаблона.
+    mem_raw = data.get("MemoryCurrent")
+    try:
+        mem_bytes = int(mem_raw)
+        # systemd возвращает UINT64_MAX ("18446744073709551615"), если учёт
+        # памяти для юнита недоступен/не включён — это не реальное значение.
+        data["memory_mb"] = round(mem_bytes / (1024 * 1024), 1) if 0 <= mem_bytes < 2**62 else None
+    except (TypeError, ValueError):
+        data["memory_mb"] = None
+
     return data
 
 
-def _journal_tail(*, unit: str, lines: int = 100) -> dict:
+def _journal_tail(*, unit: str, lines: int = 100, since: str | None = None) -> dict:
     cmd = [
         "journalctl",
         "-u",
@@ -86,8 +100,84 @@ def _journal_tail(*, unit: str, lines: int = 100) -> dict:
         "-o",
         "short-iso",
     ]
+    if since:
+        cmd += ["--since", since]
     rc, out, err = _run_cmd(cmd, timeout_sec=5)
     return {"unit": unit, "cmd": " ".join(cmd), "rc": rc, "out": out, "err": err}
+
+
+def _host_memory_summary() -> dict:
+    """Память хоста из /proc/meminfo (без внешних команд/shell)."""
+    try:
+        raw = {}
+        with open("/proc/meminfo", "r", encoding="ascii") as f:
+            for line in f:
+                key, _, rest = line.partition(":")
+                # значения в /proc/meminfo — в КБ, вида "  16384000 kB"
+                value_kb = rest.strip().split()[0]
+                raw[key] = int(value_kb)
+
+        total_kb = raw.get("MemTotal", 0)
+        available_kb = raw.get("MemAvailable", 0)
+        used_kb = max(total_kb - available_kb, 0)
+
+        def _gb(kb: int) -> float:
+            return round(kb / (1024 * 1024), 2)
+
+        return {
+            "total_gb": _gb(total_kb),
+            "available_gb": _gb(available_kb),
+            "used_gb": _gb(used_kb),
+            "used_pct": round(100 * used_kb / total_kb, 1) if total_kb else None,
+            "swap_total_gb": _gb(raw.get("SwapTotal", 0)),
+            "swap_used_gb": _gb(raw.get("SwapTotal", 0) - raw.get("SwapFree", 0)),
+            "error": None,
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def _redis_queue_lengths() -> dict:
+    """Длины очередей Celery в Redis (celery/parser) — best-effort.
+
+    Растущая без потребителя очередь — явный сигнал проблемы (нет живого
+    воркера на эту очередь, либо воркер завис/не успевает).
+    """
+    try:
+        import redis
+
+        client = redis.Redis.from_url(settings.CELERY_BROKER_URL, socket_connect_timeout=2, socket_timeout=2)
+        return {
+            "celery": client.llen("celery"),
+            "parser": client.llen("parser"),
+            "error": None,
+        }
+    except Exception as e:
+        return {"celery": None, "parser": None, "error": str(e)}
+
+
+def _active_tasks_worker_by_id(timeout_sec: float = 2.0) -> dict:
+    """task_id -> hostname воркера, который сейчас реально его выполняет.
+
+    Через Celery control API (broadcast всем воркерам, best-effort). Нужно,
+    чтобы поймать рассинхрон: аккаунт помечен в БД как запущенный, но его
+    parse_event-задача крутится не на том воркере (см. инцидент 2026-08-27 —
+    после общего рестарта пять аккаунтов на несколько минут оказались на
+    обычном prefork-воркере вместо `parser`).
+    """
+    from btkanalitics.celery import app as celery_app
+
+    result: dict = {}
+    try:
+        active = celery_app.control.inspect(timeout=timeout_sec).active() or {}
+        for worker_name, tasks in active.items():
+            for t in tasks:
+                task_id = t.get("id")
+                if task_id:
+                    result[task_id] = worker_name
+    except Exception:
+        pass
+    return result
 
 
 def _filter_log_lines(text: str, *, must_contain: list[str]) -> str:
@@ -153,6 +243,7 @@ def _collect_system_status_context() -> dict:
         "btkanalitics.target",
         "btkanalitics-web.service",
         "btkanalitics-celery-worker.service",
+        "btkanalitics-celery-worker-parser.service",
         "btkanalitics-celery-beat.service",
     ]
     unit_states = [_systemd_unit_state(u) for u in units]
@@ -160,17 +251,24 @@ def _collect_system_status_context() -> dict:
     service_units = [
         "btkanalitics-web.service",
         "btkanalitics-celery-worker.service",
+        "btkanalitics-celery-worker-parser.service",
         "btkanalitics-celery-beat.service",
     ]
     service_logs = [_journal_tail(unit=u, lines=100) for u in service_units]
 
+    # --- Память хоста и Redis-очереди (диагностика ресурсов/затыков) ---
+    host_memory = _host_memory_summary()
+    redis_queues = _redis_queue_lengths()
+
     # --- VA parser lifecycle logs (для диагностики рассинхрона статуса/кнопки) ---
     # Ищем именно те строки, которые пишет [`agromash/services/parse_event_runner.py`](agromash/services/parse_event_runner.py:1)
-    # с префиксом "va_parser".
+    # с префиксом "va_parser". С Фазы 3 (2026-08-27) эти задачи должны жить
+    # ТОЛЬКО на btkanalitics-celery-worker-parser.service (очередь `parser`,
+    # пул потоков) — обычный воркер их видеть не должен вообще.
     #
     # Фильтрацию по ключевым словам делаем на сервере (GET-параметр va_log_q)
     # и дополнительно на клиенте (JS) в шаблоне.
-    worker_unit = "btkanalitics-celery-worker.service"
+    worker_unit = "btkanalitics-celery-worker-parser.service"
     worker_tail = _journal_tail(unit=worker_unit, lines=500)
     raw_worker_out = str(worker_tail.get("out") or "")
     va_lines = "\n".join([ln for ln in raw_worker_out.splitlines() if "va_parser" in ln])
@@ -186,12 +284,38 @@ def _collect_system_status_context() -> dict:
         "q": "",
     }
 
-    # Запущенные парсеры (best-effort)
+    # --- Авто-проверка на неправильный роутинг парсеров ---
+    # 27.08.2026 после общего рестарта пять аккаунтов на несколько минут
+    # оказались на обычном prefork-воркере вместо `parser` (см. память
+    # рефакторинга). Признак ровно тот же: строки "va_parser" в логе
+    # обычного воркера, где их вообще не должно быть.
+    misrouted_unit = "btkanalitics-celery-worker.service"
+    misrouted_window = "30 minutes ago"
+    misrouted_tail = _journal_tail(unit=misrouted_unit, lines=2000, since=misrouted_window)
+    misrouted_raw = str(misrouted_tail.get("out") or "")
+    misrouted_lines = "\n".join([ln for ln in misrouted_raw.splitlines() if "va_parser" in ln])
+    routing_check = {
+        "unit": misrouted_unit,
+        "window": misrouted_window,
+        "has_misrouted": bool(misrouted_lines),
+        "count": len(misrouted_lines.splitlines()) if misrouted_lines else 0,
+        "text": misrouted_lines,
+    }
+
+    # --- Запущенные парсеры (best-effort) + реальный воркер по task_id ---
+    active_task_workers = _active_tasks_worker_by_id()
     hb_threshold = timezone.now() - timezone.timedelta(minutes=2)
     running_parsers_qs = AccountVideoAnalytics.objects.filter(
         parser_status=AccountVideoAnalytics.PARSER_STATUS_RUNNING
     ).filter(Q(parser_heartbeat_at__isnull=True) | Q(parser_heartbeat_at__gte=hb_threshold))
     running_parsers = list(running_parsers_qs.order_by("id"))
+    for acc in running_parsers:
+        worker_name = active_task_workers.get(acc.parser_task_id)
+        acc.current_worker = worker_name or "?"
+        # Ожидаем hostname вида "parser@ServerForIpCam" (см. --hostname в
+        # btkanalitics-celery-worker-parser.service). Если задача крутится
+        # на воркере с другим именем — это и есть рассинхрон маршрутизации.
+        acc.worker_mismatch = bool(worker_name) and not worker_name.startswith("parser@")
 
     # Последние события Telegram / отчёты
     telegram_logs = list(
@@ -231,6 +355,9 @@ def _collect_system_status_context() -> dict:
         "monitors": monitors_view,
         "unit_states": unit_states,
         "service_logs": service_logs,
+        "host_memory": host_memory,
+        "redis_queues": redis_queues,
+        "routing_check": routing_check,
         "va_parser_logs": va_parser_logs,
         "running_parsers": running_parsers,
         "telegram_logs": telegram_logs,
@@ -278,6 +405,7 @@ def admin_systemd_log(request):
     allowed = {
         "btkanalitics-web.service",
         "btkanalitics-celery-worker.service",
+        "btkanalitics-celery-worker-parser.service",
         "btkanalitics-celery-beat.service",
     }
     if unit not in allowed:
