@@ -253,6 +253,12 @@ def _collect_system_status_context() -> dict:
         "btkanalitics-celery-worker.service",
         "btkanalitics-celery-worker-parser.service",
         "btkanalitics-celery-beat.service",
+        # Инфраструктурные зависимости — не часть btkanalitics.target, но
+        # без них приложение не работает вообще, а их падение выглядело бы
+        # отсюда просто как "всё сломалось" без единой зацепки.
+        "nginx.service",
+        "postgresql@16-main.service",
+        "redis-server.service",
     ]
     unit_states = [_systemd_unit_state(u) for u in units]
 
