@@ -1,0 +1,9 @@
+[Unit]
+Description=Telegram-алерт о падении btkanalitics-сервиса (%i)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/btkanalitics-alert.sh %i
+# Не наследуем EnvironmentFile основного приложения — скрипт сам читает
+# только нужные значения из .env напрямую (см. btkanalitics-alert.sh).
+User=sshbeltelecom
