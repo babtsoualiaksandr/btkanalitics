@@ -13,7 +13,11 @@ EnvironmentFile=/home/sshbeltelecom/va/btkanalitics/.env
 
 # Запуск через virtualenv (у вас: /home/sshbeltelecom/va/venv/bin)
 # ExecStart=/usr/bin/env bash -lc '/home/sshbeltelecom/va/venv/bin/python manage.py runserver 0.0.0.0:8091'
-ExecStart=/usr/bin/env bash -lc '/home/sshbeltelecom/va/venv/bin/gunicorn btkanalitics.wsgi:application --bind 0.0.0.0:8091 --workers 3 --threads 2'
+# --max-requests/--max-requests-jitter: периодически пересоздаём воркеров,
+# чтобы ограничить накопление памяти за время жизни процесса (сейчас
+# рестарт воркеров происходит только по краху, что не защищает от
+# постепенного роста RSS).
+ExecStart=/usr/bin/env bash -lc '/home/sshbeltelecom/va/venv/bin/gunicorn btkanalitics.wsgi:application --bind 0.0.0.0:8091 --workers 3 --threads 2 --max-requests 1000 --max-requests-jitter 100'
 
 Restart=always
 RestartSec=5
