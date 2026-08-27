@@ -8,6 +8,7 @@ from celery.exceptions import SoftTimeLimitExceeded
 from celery.exceptions import TimeLimitExceeded
 from celery.result import AsyncResult
 from django.conf import settings
+from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
 from django.core.mail import EmailMessage
@@ -544,6 +545,25 @@ def send_due_telegram_reports() -> None:
         if not sub.subscriber_id or not getattr(sub.subscriber, "chat_id", None):
             continue
 
+        # Claim-фаза: коротко блокируем строку (SELECT ... FOR UPDATE SKIP LOCKED)
+        # и сразу сдвигаем next_run_at вперёд, прежде чем начинать медленную
+        # отправку (сетевые вызовы к Telegram/VA API). Если параллельный запуск
+        # этой же периодической задачи (например, если предыдущий не уложился
+        # в 60-секундный интервал beat) уже забрал эту подписку — SKIP LOCKED
+        # просто пропустит её здесь, без дублирующей отправки.
+        planned_next_run_at = compute_next_run_at(now=now, frequency=sub.frequency)
+        with transaction.atomic():
+            claimed = (
+                TelegramReportSubscription.objects.select_for_update(skip_locked=True)
+                .filter(pk=sub.pk)
+                .filter(Q(next_run_at__lte=now) | Q(next_run_at__isnull=True))
+            )
+            if not claimed.exists():
+                continue
+            TelegramReportSubscription.objects.filter(pk=sub.pk).update(
+                next_run_at=planned_next_run_at
+            )
+
         started_at = timezone.now()
         t0 = time.monotonic()
         run_log = ReportRunLog.objects.create(
@@ -573,9 +593,9 @@ def send_due_telegram_reports() -> None:
                         meta={"source": "celery", "subscription_id": sub.id},
                     )
 
+            # next_run_at уже сдвинут вперёд в claim-фазе выше.
             sub.last_sent_at = now
-            sub.next_run_at = compute_next_run_at(now=now, frequency=sub.frequency)
-            sub.save(update_fields=["last_sent_at", "next_run_at", "updated_at"])
+            sub.save(update_fields=["last_sent_at", "updated_at"])
 
             finished_at = timezone.now()
             run_log.finished_at = finished_at
@@ -596,6 +616,9 @@ def send_due_telegram_reports() -> None:
             )
         except Exception:
             logger.exception("Ошибка отправки отчёта (subscription_id=%s)", sub.id)
+            # Откатываем next_run_at, чтобы задача повторилась на следующем
+            # цикле beat, как и раньше (next_run_at был сдвинут в claim-фазе).
+            TelegramReportSubscription.objects.filter(pk=sub.pk).update(next_run_at=now)
             finished_at = timezone.now()
             run_log.finished_at = finished_at
             run_log.duration_ms = int((time.monotonic() - t0) * 1000)
@@ -780,6 +803,20 @@ def send_due_email_reports() -> None:
         if sub.next_run_at and sub.next_run_at > now:
             continue
 
+        # Claim-фаза: см. аналогичный комментарий в send_due_telegram_reports.
+        planned_next_run_at = compute_next_run_at(now=now, frequency=sub.frequency)
+        with transaction.atomic():
+            claimed = (
+                TelegramReportSubscription.objects.select_for_update(skip_locked=True)
+                .filter(pk=sub.pk)
+                .filter(Q(next_run_at__lte=now) | Q(next_run_at__isnull=True))
+            )
+            if not claimed.exists():
+                continue
+            TelegramReportSubscription.objects.filter(pk=sub.pk).update(
+                next_run_at=planned_next_run_at
+            )
+
         started_at = timezone.now()
         t0 = time.monotonic()
         run_log = ReportRunLog.objects.create(
@@ -799,9 +836,9 @@ def send_due_email_reports() -> None:
                 attachments=attachments,
             )
 
+            # next_run_at уже сдвинут вперёд в claim-фазе выше.
             sub.last_sent_at = now
-            sub.next_run_at = compute_next_run_at(now=now, frequency=sub.frequency)
-            sub.save(update_fields=["last_sent_at", "next_run_at", "updated_at"])
+            sub.save(update_fields=["last_sent_at", "updated_at"])
 
             finished_at = timezone.now()
             run_log.finished_at = finished_at
@@ -822,6 +859,9 @@ def send_due_email_reports() -> None:
             )
         except Exception:
             logger.exception("Ошибка отправки email-отчёта (subscription_id=%s)", sub.id)
+            # Откатываем next_run_at, чтобы задача повторилась на следующем
+            # цикле beat, как и раньше (next_run_at был сдвинут в claim-фазе).
+            TelegramReportSubscription.objects.filter(pk=sub.pk).update(next_run_at=now)
             finished_at = timezone.now()
             run_log.finished_at = finished_at
             run_log.duration_ms = int((time.monotonic() - t0) * 1000)
