@@ -35,8 +35,27 @@
             {% endif %}
           </td>
           <td>
-            {% if op.matched_alarms %}
-              <span class="fr-status fr-status--ok">{{ op.matched_alarms|length }}</span>
+            {% if op.matched_alarms_view %}
+              <div class="fr-matches" style="display:flex; flex-direction:column; gap:6px; max-height:140px; overflow-y:auto;">
+                {% for m in op.matched_alarms_view %}
+                  <div class="fr-match" style="display:flex; align-items:center; gap:6px;">
+                    {% if m.snapshot_view_url %}
+                      <img src="{{ m.snapshot_view_url }}" loading="lazy"
+                           style="width:40px; height:40px; object-fit:cover; border-radius:4px; cursor:pointer;"
+                           title="Δ{{ m.delta_seconds }}с"
+                           onclick="window.open('{{ m.snapshot_view_url }}', '_blank', 'width=800,height=600')">
+                    {% endif %}
+                    <span class="btk-muted" style="font-size:12px;">Δ{{ m.delta_seconds }}с</span>
+                    {% if m.video_view_url %}
+                      <button type="button" class="btk-btn btk-btn--small js-fr-video-toggle"
+                              data-video-url="{{ m.video_view_url }}" title="Видео">▶</button>
+                    {% endif %}
+                  </div>
+                  {% if m.video_view_url %}
+                    <div class="fr-video-slot" style="display:none;"></div>
+                  {% endif %}
+                {% endfor %}
+              </div>
             {% else %}
               <span class="btk-muted">0</span>
             {% endif %}

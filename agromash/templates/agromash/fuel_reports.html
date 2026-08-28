@@ -441,6 +441,35 @@
     if (btnCancel) btnCancel.addEventListener('click', function () { if (dlg) dlg.close(); });
     if (btnCancelEnq) btnCancelEnq.addEventListener('click', function () { if (dlgEnq) dlgEnq.close(); });
     if (btnCancelOps) btnCancelOps.addEventListener('click', function () { if (dlgOps) dlgOps.close(); });
+
+    // Видео совпавших Alarm подгружается лениво прямо в этой же модалке —
+    // содержимое диалога вставляется через innerHTML (fetch выше), поэтому
+    // обработчик вешаем через делегирование на document, а не на сами кнопки.
+    document.addEventListener('click', function (e) {
+      const btn = e.target.closest('.js-fr-video-toggle');
+      if (!btn) return;
+      e.preventDefault();
+      const slot = btn.closest('.fr-match').nextElementSibling;
+      if (!slot || !slot.classList.contains('fr-video-slot')) return;
+      if (slot.style.display === 'none' || !slot.style.display) {
+        if (!slot.dataset.loaded) {
+          const video = document.createElement('video');
+          video.src = btn.getAttribute('data-video-url');
+          video.controls = true;
+          video.style.maxWidth = '100%';
+          video.style.maxHeight = '260px';
+          slot.appendChild(video);
+          slot.dataset.loaded = '1';
+        }
+        slot.style.display = 'block';
+        btn.textContent = '▲';
+      } else {
+        slot.style.display = 'none';
+        const video = slot.querySelector('video');
+        if (video) video.pause();
+        btn.textContent = '▶';
+      }
+    });
   })();
 
   (function () {

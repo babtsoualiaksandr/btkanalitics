@@ -6,6 +6,7 @@ from . import views_fuel_report
 
 urlpatterns = [
     path('snapshot/<str:alarm_id>/', views.serve_snapshot, name='serve_snapshot'),
+    path('alarm-video/<str:alarm_id>/', views.serve_alarm_video, name='serve_alarm_video'),
     path('system-status/', views.system_status, name='system_status'),
 
     # Отчёты о заправках (не-admin страница для операторов)

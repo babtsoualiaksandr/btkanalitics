@@ -1,5 +1,5 @@
 from django.shortcuts import render, redirect
-from django.http import HttpResponse, Http404
+from django.http import FileResponse, HttpResponse, Http404
 from django.http import JsonResponse
 from django.conf import settings
 from django.contrib import admin as django_admin
@@ -516,6 +516,38 @@ def admin_task_status(request):
     return JsonResponse(data)
 
 
+def _assert_alarm_access(request, alarm: Alarm) -> None:
+    """Доступ к медиа (snapshot/video) конкретного Alarm:
+
+    - staff/superuser: разрешаем всегда
+    - обычный пользователь: только если монитор разрешен через UserMonitorAccess
+    """
+    user = getattr(request, 'user', None)
+    _assert_events_access(user)
+    if getattr(user, 'is_staff', False) or getattr(user, 'is_superuser', False):
+        return
+
+    monitor_pk = getattr(alarm, 'monitor_ref_id', None)
+    if not monitor_pk:
+        # best-effort: сопоставим по числовому Alarm.monitor_id
+        try:
+            m = Monitor.objects.filter(monitor_id=str(int(alarm.monitor_id))).only('id').first()
+            monitor_pk = m.id if m else None
+        except Exception:
+            monitor_pk = None
+
+    if not monitor_pk:
+        raise Http404("Monitor not found")
+
+    allowed = UserMonitorAccess.objects.filter(
+        user_id=getattr(user, 'id', None),
+        monitor_id=int(monitor_pk),
+        enabled=True,
+    ).exists()
+    if not allowed:
+        raise Http404("Forbidden")
+
+
 @login_required
 def serve_snapshot(request, alarm_id):
     """
@@ -526,37 +558,13 @@ def serve_snapshot(request, alarm_id):
     except Alarm.DoesNotExist:
         raise Http404("Alarm not found")
 
-    # Доступ к snapshot:
-    # - staff/superuser: разрешаем всегда
-    # - обычный пользователь: только если монитор разрешен через UserMonitorAccess
-    user = getattr(request, 'user', None)
-    _assert_events_access(user)
-    if not (getattr(user, 'is_staff', False) or getattr(user, 'is_superuser', False)):
-        monitor_pk = getattr(alarm, 'monitor_ref_id', None)
-        if not monitor_pk:
-            # best-effort: сопоставим по числовому Alarm.monitor_id
-            try:
-                m = Monitor.objects.filter(monitor_id=str(int(alarm.monitor_id))).only('id').first()
-                monitor_pk = m.id if m else None
-            except Exception:
-                monitor_pk = None
+    _assert_alarm_access(request, alarm)
 
-        if not monitor_pk:
-            raise Http404("Monitor not found")
-
-        allowed = UserMonitorAccess.objects.filter(
-            user_id=getattr(user, 'id', None),
-            monitor_id=int(monitor_pk),
-            enabled=True,
-        ).exists()
-        if not allowed:
-            raise Http404("Forbidden")
-    
     # Важно для первичного запуска: если токенов ещё нет в БД,
     # VAApiClient сам выполнит login и сохранит их.
     if not alarm.original_quality_snapshot or not alarm.account:
         raise Http404("No snapshot available")
-    
+
     try:
         client = VAApiClient(account_id=alarm.account_id, base_url=settings.BASE_URL)
         resp = client.request('GET', alarm.original_quality_snapshot, stream=True)
@@ -571,3 +579,24 @@ def serve_snapshot(request, alarm_id):
         return HttpResponse(content, content_type=content_type)
     except Exception as e:
         raise Http404(f"Error fetching image: {str(e)}")
+
+
+@login_required
+def serve_alarm_video(request, alarm_id):
+    """Отдаёт локально сохранённый video_clip (см. agromash.services.video_clip).
+
+    В отличие от serve_snapshot не ходит во внешний VA API — файл уже лежит на диске
+    (media/video/...). MEDIA_URL в проде не раздаётся напрямую (nginx отдаёт только
+    /static/), поэтому видео отдаём через Django, как и снапшоты.
+    """
+    try:
+        alarm = Alarm.objects.get(alarm_id=alarm_id)
+    except Alarm.DoesNotExist:
+        raise Http404("Alarm not found")
+
+    _assert_alarm_access(request, alarm)
+
+    if not alarm.video_clip:
+        raise Http404("No video available")
+
+    return FileResponse(alarm.video_clip.open('rb'), content_type='video/mp4')

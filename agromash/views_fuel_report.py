@@ -18,7 +18,7 @@ from django.urls import reverse
 from django.utils.dateparse import parse_date
 from django.views.decorators.http import require_GET, require_POST
 
-from .models import FuelOperation, FuelReport, TelegramSubscriber
+from .models import Alarm, FuelOperation, FuelReport, TelegramSubscriber
 from .services.fuel_report_actions import send_to_subscribers, start_analysis, start_export
 from .services.fuel_report_exporter import FUEL_REPORT_XLSX_COLUMNS
 from .services.fuel_report_importer import FuelImportError, import_fuel_report_from_xlsx
@@ -171,7 +171,44 @@ def fuel_report_operations(request, report_id: int):
     report = get_object_or_404(FuelReport, pk=report_id)
     ops_qs = FuelOperation.objects.filter(report_id=report.id).select_related("plate_identity")
     total_ops = ops_qs.count()
-    operations = ops_qs.order_by("-operation_at")[:OPERATIONS_LIST_LIMIT]
+    operations = list(ops_qs.order_by("-operation_at")[:OPERATIONS_LIST_LIMIT])
+
+    # matched_alarms кэшируется в момент анализа (см. fuel_report_analyzer.py) и
+    # содержит только snapshot_url на момент анализа — video_clip к тому моменту
+    # мог ещё не скачаться (задача асинхронная) или монитор мог быть включён на
+    # запись позже. Поэтому video-доступность подтягиваем свежей отдельным запросом.
+    alarm_pks: set[int] = set()
+    for op in operations:
+        for row in (op.matched_alarms or []):
+            pk = row.get("id")
+            if pk:
+                alarm_pks.add(pk)
+
+    alarms_by_pk = {}
+    if alarm_pks:
+        alarms_by_pk = {
+            a.id: a
+            for a in Alarm.objects.filter(pk__in=alarm_pks).only(
+                "id", "alarm_id", "video_clip", "video_clip_status"
+            )
+        }
+
+    for op in operations:
+        enriched = []
+        for row in (op.matched_alarms or []):
+            alarm = alarms_by_pk.get(row.get("id"))
+            item = dict(row)
+            item["snapshot_view_url"] = (
+                reverse("serve_snapshot", args=[alarm.alarm_id]) if alarm else None
+            )
+            item["video_view_url"] = (
+                reverse("serve_alarm_video", args=[alarm.alarm_id])
+                if alarm and alarm.video_clip and alarm.video_clip_status == Alarm.VIDEO_STATUS_READY
+                else None
+            )
+            enriched.append(item)
+        op.matched_alarms_view = enriched
+
     ctx = {
         "report": report,
         "operations": operations,
