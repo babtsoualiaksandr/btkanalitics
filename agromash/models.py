@@ -1,3 +1,4 @@
+import datetime
 import logging
 
 from django.conf import settings
@@ -247,7 +248,22 @@ class AccountVideoAnalytics(models.Model):
         return is_fresh
 
 
+def _alarm_video_clip_upload_to(instance: 'Alarm', filename: str) -> str:
+    dt = datetime.datetime.fromtimestamp(int(instance.start_time) / 1000.0, tz=datetime.timezone.utc)
+    safe_id = str(instance.alarm_id or 'unknown').replace(':', '_').replace('/', '_')[:128]
+    return f"video/{dt.strftime('%Y/%m/%d')}/{safe_id}.mp4"
+
+
 class Alarm(models.Model):
+    VIDEO_STATUS_PENDING = 'pending'
+    VIDEO_STATUS_READY = 'ready'
+    VIDEO_STATUS_ERROR = 'error'
+    VIDEO_STATUS_CHOICES = (
+        (VIDEO_STATUS_PENDING, 'Скачивается'),
+        (VIDEO_STATUS_READY, 'Готово'),
+        (VIDEO_STATUS_ERROR, 'Ошибка'),
+    )
+
     monitor_id = models.IntegerField()
     monitor_name = models.CharField(max_length=255)
     # Нормализованная связь с Monitor (best-effort). Дублирует monitor_id/monitor_name,
@@ -270,6 +286,17 @@ class Alarm(models.Model):
     snapshots = models.JSONField(null=True, blank=True)
     data = models.JSONField()
     account = models.ForeignKey(AccountVideoAnalytics, on_delete=models.CASCADE)
+
+    video_clip = models.FileField(upload_to=_alarm_video_clip_upload_to, null=True, blank=True)
+    video_clip_size = models.PositiveBigIntegerField(null=True, blank=True)
+    video_clip_status = models.CharField(
+        max_length=16,
+        choices=VIDEO_STATUS_CHOICES,
+        null=True,
+        blank=True,
+        help_text='Пусто — запись видео не включена для монитора этого события.',
+    )
+    video_clip_error = models.TextField(null=True, blank=True)
 
     class Meta:
         indexes = [
@@ -302,6 +329,11 @@ class Monitor(models.Model):
     monitor_id = models.CharField(max_length=255, unique=True)
     monitor_name = models.CharField(max_length=255)
     topic = models.CharField(max_length=255)
+    record_video_enabled = models.BooleanField(
+        default=False,
+        verbose_name='Записывать видео',
+        help_text='Скачивать видео-клип VMS-архива для новых Alarm с этого монитора.',
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

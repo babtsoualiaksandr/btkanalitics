@@ -11,15 +11,23 @@ from django.conf import settings
 from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
+from django.core.files.base import ContentFile
 from django.core.mail import EmailMessage
 
-from agromash.models import AccountVideoAnalytics, FuelReport, ReportRunLog, TelegramReportSubscription, TelegramSubscriber
+from agromash.models import AccountVideoAnalytics, Alarm, FuelReport, ReportRunLog, TelegramReportSubscription, TelegramSubscriber
 from agromash.services.fuel_report_analyzer import analyze_fuel_report
 from agromash.services.fuel_report_exporter import export_fuel_report_to_xlsx_bytes
 from agromash.services.parse_event_runner import ParserRunContext, run_parse_event
 from agromash.services.report_scheduler import compute_next_run_at
 from agromash.services.reporting import generate_report_attachments, generate_report_attachments_for_range
 from agromash.services.telegram_client import send_document, send_message
+from agromash.services.video_clip import (
+    VideoClipError,
+    build_video_clip_filename,
+    download_archive_clip_bytes,
+    get_video_stream_ticket,
+)
+from agromash.va_api_client import VAApiClient
 
 # Импортируем задачи мониторинга, чтобы Celery их зарегистрировал
 from agromash import tasks_monitoring  # noqa: F401
@@ -790,6 +798,74 @@ def send_email_report_range_now(
         run_log.ok = False
         run_log.error = "exception"
         run_log.save(update_fields=["finished_at", "duration_ms", "ok", "error"])
+
+
+@shared_task(name="agromash.download_alarm_video_clip")
+def download_alarm_video_clip_task(alarm_id: int) -> None:
+    """Скачивает видео-клип VMS-архива для Alarm и сохраняет ссылку в БД.
+
+    Ставится в очередь из agromash.signals только для Alarm, у которых
+    monitor_ref.record_video_enabled=True (см. Monitor.record_video_enabled).
+    """
+    pre_roll_sec = float(getattr(settings, "VIDEO_CLIP_PRE_ROLL_SEC", 4.0))
+    post_roll_sec = float(getattr(settings, "VIDEO_CLIP_POST_ROLL_SEC", 4.0))
+
+    try:
+        alarm = Alarm.objects.select_related("account").get(pk=alarm_id)
+    except Alarm.DoesNotExist:
+        logger.warning("download_alarm_video_clip_task: Alarm %s не найден", alarm_id)
+        return
+
+    Alarm.objects.filter(pk=alarm_id).update(
+        video_clip_status=Alarm.VIDEO_STATUS_PENDING, video_clip_error=None
+    )
+
+    stream_id = alarm.data.get("stream_id") if isinstance(alarm.data, dict) else None
+    if not stream_id:
+        Alarm.objects.filter(pk=alarm_id).update(
+            video_clip_status=Alarm.VIDEO_STATUS_ERROR,
+            video_clip_error="В Alarm.data нет stream_id",
+        )
+        return
+
+    since_ms = int(alarm.start_time) - int(pre_roll_sec * 1000)
+    duration_sec = max(
+        (int(alarm.end_time) - int(alarm.start_time)) / 1000.0 + pre_roll_sec + post_roll_sec,
+        pre_roll_sec + post_roll_sec,
+    )
+
+    try:
+        client = VAApiClient(account_id=alarm.account_id, base_url=settings.BASE_URL)
+        ticket = get_video_stream_ticket(client, alarm.account)
+        clip_bytes = download_archive_clip_bytes(
+            base_url=settings.BASE_URL,
+            stream_id=int(stream_id),
+            since_ms=since_ms,
+            duration_sec=duration_sec,
+            ticket=ticket,
+        )
+    except Exception as e:
+        logger.exception("download_alarm_video_clip_task failed alarm_id=%s", alarm_id)
+        Alarm.objects.filter(pk=alarm_id).update(
+            video_clip_status=Alarm.VIDEO_STATUS_ERROR,
+            video_clip_error=str(e)[:2000],
+        )
+        return
+
+    filename = build_video_clip_filename(alarm.alarm_id)
+    alarm.video_clip.save(filename, ContentFile(clip_bytes), save=False)
+    Alarm.objects.filter(pk=alarm_id).update(
+        video_clip=alarm.video_clip.name,
+        video_clip_size=len(clip_bytes),
+        video_clip_status=Alarm.VIDEO_STATUS_READY,
+        video_clip_error=None,
+    )
+    logger.info(
+        "download_alarm_video_clip_task ok alarm_id=%s size=%s path=%s",
+        alarm_id,
+        len(clip_bytes),
+        alarm.video_clip.name,
+    )
 
 
 @shared_task(name="agromash.send_due_email_reports")

@@ -291,6 +291,20 @@ PARSER_BACKOFF_EPISODE_WINDOW_MIN = config('PARSER_BACKOFF_EPISODE_WINDOW_MIN', 
 # сработать (см. agromash/services/parse_event_runner.py).
 PARSER_HEARTBEAT_TIMEOUT_SEC = config('PARSER_HEARTBEAT_TIMEOUT_SEC', default=120, cast=int)
 
+# -----------------
+# Видео-клипы Alarm (архив VMS)
+# -----------------
+# Отступы вокруг start_time/end_time алярма при скачивании клипа — даёт
+# контекст "что было до/после", а не только точку детекции.
+VIDEO_CLIP_PRE_ROLL_SEC = config('VIDEO_CLIP_PRE_ROLL_SEC', default=4.0, cast=float)
+VIDEO_CLIP_POST_ROLL_SEC = config('VIDEO_CLIP_POST_ROLL_SEC', default=4.0, cast=float)
+
+# Лимит суммарного размера video_clip на диске. На сервере свободно немного
+# места (см. деплой-заметки) — 20 ГБ оставляет запас под ОС/Postgres/логи.
+VIDEO_CLIP_STORAGE_QUOTA_BYTES = config(
+    'VIDEO_CLIP_STORAGE_QUOTA_BYTES', default=20 * 1024 ** 3, cast=int
+)
+
 # Периодические задачи (Celery Beat)
 CELERY_BEAT_SCHEDULE = {
     "send_due_telegram_reports_every_minute": {
@@ -312,6 +326,11 @@ CELERY_BEAT_SCHEDULE = {
     "auto_restart_error_parsers_every_20_sec": {
         "task": "agromash.auto_restart_error_parsers",
         "schedule": 20.0,
+    },
+    # Квота на видео-клипы не time-sensitive — раз в 5 минут достаточно.
+    "enforce_video_clip_storage_quota_every_5_min": {
+        "task": "agromash.enforce_video_clip_storage_quota",
+        "schedule": 300.0,
     },
 }
 

@@ -5,10 +5,14 @@ from django.conf import settings
 from django.utils import timezone
 from celery import shared_task
 
-from agromash.models import AccountVideoAnalytics
+from agromash.models import AccountVideoAnalytics, Alarm
 
 
 logger = logging.getLogger(__name__)
+
+# Лимит на общий объём video_clip на диске (см. settings.py) — по превышении
+# удаляются самые старые (по Alarm.start_time) клипы, пока не уложимся в лимит.
+VIDEO_CLIP_STORAGE_QUOTA_BYTES = getattr(settings, "VIDEO_CLIP_STORAGE_QUOTA_BYTES", 20 * 1024 ** 3)
 
 # Порог "протухшего" heartbeat (сек) — см. комментарий в settings.py.
 PARSER_HEARTBEAT_TIMEOUT_SEC = getattr(settings, "PARSER_HEARTBEAT_TIMEOUT_SEC", 120)
@@ -179,4 +183,60 @@ def auto_restart_error_parsers() -> None:
         "auto_restart_error_parsers: restarted %s/%s parser(s)",
         restarted,
         len(to_restart),
+    )
+
+
+@shared_task(name="agromash.enforce_video_clip_storage_quota")
+def enforce_video_clip_storage_quota() -> None:
+    """Периодическая задача: держит суммарный размер video_clip под лимитом.
+
+    По превышении VIDEO_CLIP_STORAGE_QUOTA_BYTES удаляет самые старые (по
+    Alarm.start_time) клипы с диска, пока не уложимся в лимит. Сам Alarm при
+    этом не удаляется — теряется только видео.
+    """
+
+    ready_qs = Alarm.objects.filter(
+        video_clip_status=Alarm.VIDEO_STATUS_READY
+    ).exclude(video_clip="")
+
+    total_bytes = sum(ready_qs.values_list("video_clip_size", flat=True).iterator())
+    if total_bytes <= VIDEO_CLIP_STORAGE_QUOTA_BYTES:
+        logger.debug(
+            "enforce_video_clip_storage_quota: %.2f GB / %.2f GB, ничего не удаляем",
+            total_bytes / 1024 ** 3,
+            VIDEO_CLIP_STORAGE_QUOTA_BYTES / 1024 ** 3,
+        )
+        return
+
+    logger.info(
+        "enforce_video_clip_storage_quota: %.2f GB > лимита %.2f GB, чищу старые клипы",
+        total_bytes / 1024 ** 3,
+        VIDEO_CLIP_STORAGE_QUOTA_BYTES / 1024 ** 3,
+    )
+
+    deleted = 0
+    freed_bytes = 0
+    for alarm in ready_qs.order_by("start_time").iterator():
+        if total_bytes <= VIDEO_CLIP_STORAGE_QUOTA_BYTES:
+            break
+        size = alarm.video_clip_size or 0
+        try:
+            alarm.video_clip.delete(save=False)
+            Alarm.objects.filter(pk=alarm.pk).update(
+                video_clip=None, video_clip_size=None, video_clip_status=None
+            )
+            total_bytes -= size
+            freed_bytes += size
+            deleted += 1
+        except Exception:
+            logger.exception(
+                "enforce_video_clip_storage_quota: не удалось удалить video_clip alarm_id=%s",
+                alarm.alarm_id,
+            )
+
+    logger.info(
+        "enforce_video_clip_storage_quota: удалено %s клип(ов), освобождено %.2f GB, осталось %.2f GB",
+        deleted,
+        freed_bytes / 1024 ** 3,
+        total_bytes / 1024 ** 3,
     )

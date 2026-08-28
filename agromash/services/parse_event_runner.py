@@ -637,6 +637,7 @@ def _process_sse_event(
                     "account": account,
                     "monitor_id": alarm.get("monitor_id", monitor_id),
                     "monitor_name": alarm.get("monitor_name", monitor_name or ""),
+                    "monitor_ref": monitor_obj,
                     "topic": alarm.get("topic", ""),
                     "start_time": start_time,
                     "end_time": end_time,
