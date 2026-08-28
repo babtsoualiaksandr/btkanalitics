@@ -171,6 +171,27 @@ def send_alarm_to_telegram(sender, instance, created, **kwargs):
                 )
 
 
+@receiver(post_save, sender=Alarm)
+def queue_alarm_video_download(sender, instance: Alarm, created: bool, **kwargs):
+    """Ставит в очередь скачивание видео-клипа, если у монитора события включена запись.
+
+    Не скачивает синхронно (в отличие от send_alarm_to_telegram выше) — WS-сессия за
+    видео занимает секунды и заблокировала бы поток SSE-парсера, создавший этот Alarm.
+    """
+    if not created:
+        return
+
+    monitor = instance.monitor_ref
+    if not monitor or not monitor.record_video_enabled:
+        return
+
+    # Локальный импорт — избегаем циклического импорта agromash.tasks (по аналогии
+    # с agromash/tasks_monitoring.py, где по той же причине импорты тоже отложены).
+    from .tasks import download_alarm_video_clip_task
+
+    download_alarm_video_clip_task.delay(instance.pk)
+
+
 @receiver(m2m_changed, sender=TelegramSubscriber.subscribed_monitors.through)
 def notify_subscriber_monitors_changed(sender, instance: TelegramSubscriber, action: str, pk_set, **kwargs):
     """Уведомлять подписчика при изменении списка мониторов (в т.ч. из админки)."""

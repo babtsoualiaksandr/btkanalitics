@@ -24,6 +24,8 @@ class AlarmAdmin(admin.ModelAdmin):
         'start_time_human',
         'end_time_human',
         'snapshot_preview',
+        'video_clip_status',
+        'video_clip',
     )
     search_fields = (
         'alarm_id',
@@ -37,6 +39,7 @@ class AlarmAdmin(admin.ModelAdmin):
     list_filter = (
         'account',
         'topic',
+        'video_clip_status',
     )
     ordering = ('-start_time',)
     list_per_page = 20
@@ -49,6 +52,9 @@ class AlarmAdmin(admin.ModelAdmin):
         'end_time',
         'start_time_human',
         'end_time_human',
+        'video_clip_status',
+        'video_clip_size',
+        'video_clip_error',
     )
 
     _to_aware_dt = staticmethod(alarm_epoch_to_aware_dt)
@@ -133,7 +139,16 @@ class PlateIdentityAdmin(admin.ModelAdmin):
 
 @admin.register(Monitor)
 class MonitorAdmin(admin.ModelAdmin):
-    list_display = ('monitor_id', 'monitor_name', 'topic', 'subscribers_count', 'created_at', 'updated_at')
+    list_display = (
+        'monitor_id',
+        'monitor_name',
+        'topic',
+        'record_video_enabled',
+        'subscribers_count',
+        'created_at',
+        'updated_at',
+    )
+    list_editable = ('record_video_enabled',)
     search_fields = (
         'monitor_id',
         'monitor_name',
@@ -141,7 +156,7 @@ class MonitorAdmin(admin.ModelAdmin):
         'subscribers__chat_id',
         'subscribers__username',
     )
-    list_filter = ('topic',)
+    list_filter = ('topic', 'record_video_enabled')
     readonly_fields = ('created_at', 'updated_at')
 
     def get_queryset(self, request):
