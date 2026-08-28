@@ -63,6 +63,24 @@ journalctl -u btkanalitics-celery-worker.service -f
 journalctl -u btkanalitics-celery-beat.service -f
 ```
 
+Все сервисы (Django/gunicorn, Celery worker/beat) пишут только в stdout/stderr —
+своих файлов логов нет, отдельный logrotate.d им не нужен. Единственное место,
+где логи реально копятся — сам journald (по умолчанию без лимита размера, у нас
+на 2026-08-28 разросся до 4+ ГБ). Лимит задан в
+[`journald-btkanalitics.conf`](deploy/systemd/journald-btkanalitics.conf:1)
+(1 ГБ / 90 дней), установка:
+
+```bash
+sudo mkdir -p /etc/systemd/journald.conf.d
+sudo cp deploy/systemd/journald-btkanalitics.conf /etc/systemd/journald.conf.d/
+sudo systemctl restart systemd-journald
+sudo journalctl --vacuum-size=1G
+```
+
+nginx и postgresql пишут в файлы и уже покрыты штатными `/etc/logrotate.d/nginx`
+и `/etc/logrotate.d/postgresql-common` (ставятся вместе с пакетами) — трогать
+не нужно.
+
 ## Важно про virtualenv
 
 В unit'ах сейчас `ExecStart` запускается через `bash -lc`.
