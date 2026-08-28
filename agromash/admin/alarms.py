@@ -25,7 +25,7 @@ class AlarmAdmin(admin.ModelAdmin):
         'end_time_human',
         'snapshot_preview',
         'video_clip_status',
-        'video_clip',
+        'video_preview',
     )
     search_fields = (
         'alarm_id',
@@ -52,6 +52,7 @@ class AlarmAdmin(admin.ModelAdmin):
         'end_time',
         'start_time_human',
         'end_time_human',
+        'video_preview',
         'video_clip_status',
         'video_clip_size',
         'video_clip_error',
@@ -99,6 +100,29 @@ class AlarmAdmin(admin.ModelAdmin):
         return "No image available"
 
     snapshot_preview.short_description = "Snapshot"
+
+    def video_preview(self, obj):
+        """Плеер видео-клипа в списке и форме редактирования.
+
+        Отдаём через serve_alarm_video (не через obj.video_clip.url) — в проде
+        nginx раздаёт только /static/, MEDIA_URL напрямую недоступен (см.
+        agromash/views.py:serve_alarm_video).
+        """
+        if obj.video_clip and obj.video_clip_status == Alarm.VIDEO_STATUS_READY:
+            from django.urls import reverse
+            video_url = reverse('serve_alarm_video', args=[obj.alarm_id])
+            return format_html(
+                '<video controls preload="none" style="max-width: 200px; max-height: 120px;">'
+                '<source src="{}" type="video/mp4"></video>',
+                video_url,
+            )
+        if obj.video_clip_status == Alarm.VIDEO_STATUS_PENDING:
+            return "Скачивается…"
+        if obj.video_clip_status == Alarm.VIDEO_STATUS_ERROR:
+            return format_html('<span style="color: #b00;" title="{}">Ошибка</span>', obj.video_clip_error or '')
+        return "—"
+
+    video_preview.short_description = "Видео"
 
 
 @admin.register(PlateIdentity)
