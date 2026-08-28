@@ -38,6 +38,7 @@ sudo systemctl restart btkanalitics.target
 - [`btkanalitics-web.service`](deploy/systemd/btkanalitics-web.service:1)
 - [`btkanalitics-celery-worker.service`](deploy/systemd/btkanalitics-celery-worker.service:1)
 - [`btkanalitics-celery-beat.service`](deploy/systemd/btkanalitics-celery-beat.service:1)
+- [`btkanalitics-bot.service`](deploy/systemd/btkanalitics-bot.service:1)
 
 После правок не забудьте:
 
@@ -54,6 +55,19 @@ sudo systemctl restart btkanalitics.target
 sudo systemctl disable btkanalitics-web.service btkanalitics-celery-worker.service btkanalitics-celery-beat.service
 sudo systemctl enable --now btkanalitics.target
 ```
+
+## Telegram-бот (`btkanalitics-bot.service`)
+
+Обработка входящих команд бота (`/app`, `/start` и т.п. — см.
+`agromash/management/commands/handle_bot.py`) — это отдельный вечный
+`getUpdates`-polling процесс, **не** часть gunicorn/Celery. Раньше он жил
+только внутри `AgromashConfig.ready()` (`agromash/apps.py`), а тот стартует
+поток с ботом лишь при `manage.py runserver` — в проде же используется
+gunicorn, поэтому бот на самом деле никогда не был поднят: webhook не
+настроен, `getUpdates` никто не вызывал, входящие команды копились без
+ответа (в т.ч. кнопка Mini App никогда не пересылалась заново).
+`btkanalitics-bot.service` запускает тот же цикл через management-command,
+уже не завязанный на `sys.argv`.
 
 ## Логи
 

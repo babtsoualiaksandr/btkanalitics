@@ -1,0 +1,27 @@
+[Unit]
+Description=btkanalitics Telegram bot (getUpdates polling, команды /app и т.д.)
+PartOf=btkanalitics.target
+After=network.target
+OnFailure=btkanalitics-alert@%n.service
+
+[Service]
+Type=simple
+User=sshbeltelecom
+WorkingDirectory=/home/sshbeltelecom/va/btkanalitics
+EnvironmentFile=/home/sshbeltelecom/va/btkanalitics/.env
+
+# Раньше запускался только внутри AgromashConfig.ready() (agromash/apps.py),
+# а тот стартует поток с ботом только под `runserver` — в проде же gunicorn
+# (btkanalitics-web.service), поэтому бот на самом деле нигде не был поднят:
+# webhook не настроен, getUpdates никто не вызывал, входящие команды (/app
+# и т.п.) оставались без ответа. handle_bot.py — тот же цикл getUpdates,
+# что и в apps.py, но отдельным management-command, без завязки на sys.argv.
+ExecStart=/usr/bin/env bash -lc '/home/sshbeltelecom/va/venv/bin/python manage.py handle_bot'
+
+Restart=always
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=10
+
+[Install]
+WantedBy=btkanalitics.target
