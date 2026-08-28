@@ -6,325 +6,529 @@
     <title>BTK Reports</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
-      :root { --bg: #0f0f10; --card: #1b1b1d; --muted:#9aa0a6; --text:#e8eaed; --accent:#2ea6ff; --danger:#ff5a5f; }
-      body { margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; background: var(--bg); color: var(--text); }
-      header { padding: 14px 16px; border-bottom: 1px solid #2a2a2c; }
-      h1 { margin:0; font-size: 18px; }
-      main { padding: 12px 16px 24px; }
-      .row { display:flex; gap:10px; flex-wrap: wrap; }
-      .card { background: var(--card); border: 1px solid #2a2a2c; border-radius: 12px; padding: 12px; margin: 10px 0; }
-      .muted { color: var(--muted); }
-      .btn { border: 1px solid #2a2a2c; background: transparent; color: var(--text); padding: 10px 12px; border-radius: 10px; cursor: pointer; }
-      .btn.primary { border-color: var(--accent); color: var(--accent); }
-      .btn.danger { border-color: var(--danger); color: var(--danger); }
-      .btn:disabled { opacity: .5; cursor: not-allowed; }
-      label { display:block; font-size: 12px; color: var(--muted); margin-top: 10px; }
-      input, select { width: 100%; box-sizing: border-box; background: #111113; border: 1px solid #2a2a2c; color: var(--text); padding: 10px 12px; border-radius: 10px; }
-      .grid { display:grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-      .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
-      .list-item { cursor:pointer; }
-      .badge { display:inline-block; padding: 2px 8px; border-radius: 999px; border: 1px solid #2a2a2c; font-size: 12px; }
-      .badge.on { border-color: #3ddc84; color: #3ddc84; }
-      .badge.off { border-color: #888; color: #888; }
-      .hr { height:1px; background:#2a2a2c; margin: 10px 0; }
-      .error { color: var(--danger); white-space: pre-wrap; }
+      :root {
+        --bg: #0e1621;
+        --section-bg: #17212b;
+        --text: #ffffff;
+        --hint: #6d7f8f;
+        --accent: #4ea4e8;
+        --accent-text: #ffffff;
+        --separator: #0a121a;
+        --destructive: #ec4e4e;
+        --success: #4fce5d;
+        --track-off: #2b3a48;
+      }
+      * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+      html, body { margin: 0; height: 100%; }
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+        background: var(--bg);
+        color: var(--text);
+        overscroll-behavior-y: none;
+      }
+      a { color: var(--accent); text-decoration: none; }
+      header {
+        position: sticky; top: 0; z-index: 5;
+        padding: 14px 16px 12px;
+        background: var(--bg);
+        border-bottom: 1px solid var(--separator);
+        display: flex; align-items: center; gap: 10px;
+      }
+      header h1 { margin: 0; font-size: 17px; font-weight: 700; line-height: 1.2; }
+      #meta { color: var(--hint); font-size: 12.5px; margin-top: 1px; }
+      .back-btn {
+        width: 32px; height: 32px; border-radius: 8px; flex-shrink: 0;
+        display: flex; align-items: center; justify-content: center;
+        background: var(--section-bg); cursor: pointer; border: none;
+      }
+      main { padding: 0 0 32px; }
+      .section-title {
+        font-size: 12.5px; font-weight: 600; color: var(--hint);
+        text-transform: uppercase; letter-spacing: .4px;
+        padding: 18px 16px 6px;
+      }
+      .card { background: var(--section-bg); border-radius: 10px; overflow: hidden; margin: 0 16px; }
+      .card.pad { padding: 12px 16px; }
+      .row {
+        display: flex; align-items: center; gap: 12px;
+        padding: 12px 16px; min-height: 44px;
+      }
+      .row.tap { cursor: pointer; }
+      .row.tap:active { background: color-mix(in srgb, var(--text) 6%, transparent); }
+      .divider { height: 1px; background: var(--separator); margin-left: 16px; }
+      .muted { color: var(--hint); }
+      .icon-wrap {
+        width: 29px; height: 29px; border-radius: 8px; flex-shrink: 0;
+        display: flex; align-items: center; justify-content: center;
+        background: color-mix(in srgb, var(--accent) 16%, transparent);
+      }
+      .icon-wrap svg { stroke: var(--accent); }
+
+      .switch { width: 44px; height: 26px; border-radius: 14px; position: relative; flex-shrink: 0; cursor: pointer; transition: background .15s; }
+      .switch .knob { width: 22px; height: 22px; border-radius: 50%; background: #fff; position: absolute; top: 2px; left: 2px; box-shadow: 0 1px 3px rgba(0,0,0,.3); transition: left .15s; }
+      .switch.on { background: var(--accent); }
+      .switch.off { background: var(--track-off); }
+      .switch.on .knob { left: 20px; }
+
+      .top16 { margin-top: 16px; }
+      .top12 { margin-top: 12px; }
+
+      .chip-row { display: flex; gap: 6px; flex-wrap: wrap; }
+      .chip {
+        padding: 7px 13px; border-radius: 8px; font-size: 13px; font-weight: 600;
+        white-space: nowrap; cursor: pointer; background: var(--bg); color: var(--text);
+        border: none; font-family: inherit;
+      }
+      .chip.active { background: var(--accent); color: var(--accent-text); }
+      .chip.block { flex: 1; text-align: center; }
+
+      .stepper { display: flex; align-items: center; justify-content: space-between; padding: 6px 0; }
+      .stepper-btn {
+        width: 28px; height: 28px; border-radius: 50%; flex-shrink: 0; border: none;
+        display: flex; align-items: center; justify-content: center; background: var(--bg); cursor: pointer;
+      }
+      .stepper-btn svg { fill: var(--text); }
+      .stepper-val { font-size: 14px; min-width: 70px; text-align: center; }
+
+      input[type=email], input[type=datetime-local] {
+        border: none; outline: none; background: transparent; color: var(--text);
+        font-size: 15px; width: 100%; font-family: inherit; color-scheme: dark;
+      }
+      input[type=email] { text-align: right; }
+      input[type=email]::placeholder { color: var(--hint); }
+
+      .toast {
+        margin: 12px 16px 0; padding: 10px 14px; border-radius: 8px; font-size: 13px;
+        background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--accent);
+      }
+      .error-banner {
+        margin: 12px 16px 0; padding: 10px 14px; border-radius: 8px; font-size: 13px;
+        background: color-mix(in srgb, var(--destructive) 15%, transparent); color: var(--destructive);
+        white-space: pre-wrap;
+      }
+      .empty { padding: 40px 16px; text-align: center; color: var(--hint); font-size: 14px; }
+      .skeleton { padding: 16px; color: var(--hint); font-size: 14px; text-align: center; }
+
+      .footer-hint { padding: 14px 16px 0; font-size: 12px; color: var(--hint); line-height: 1.5; }
+
+      /* Нативный MainButton у Telegram появляется сам (см. tg.MainButton) — этот
+         фолбэк используется только когда Mini App открыт вне Telegram (например,
+         для проверки в обычном браузере). */
+      #fallbackMainBtn {
+        display: none;
+        background: var(--accent); color: var(--accent-text);
+        text-align: center; font-weight: 600; font-size: 16px;
+        padding: 16px; margin: 16px; border-radius: 10px; cursor: pointer;
+      }
     </style>
   </head>
   <body>
     <header>
-      <h1>Подписки на отчёты</h1>
-      <div id="me" class="muted" style="margin-top:6px;font-size:12px;"></div>
+      <button id="backBtn" class="back-btn" style="display:none;" aria-label="Назад">
+        <svg width="9" height="16" viewBox="0 0 9 16" fill="none"><path d="M8 1L1.5 8L8 15" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <div>
+        <h1 id="title">BTK Reports</h1>
+        <div id="meta"></div>
+      </div>
     </header>
     <main>
-      <div id="error" class="error"></div>
-      <div id="list">
-        <div id="alarmMonitors"></div>
-        <div id="subs"></div>
-      </div>
-      <div id="details" style="display:none;"></div>
+      <div id="errorBox"></div>
+      <div id="screen"><div class="skeleton">Загрузка…</div></div>
+      <div id="fallbackMainBtn"></div>
     </main>
 
     <script>
       const tg = window.Telegram?.WebApp;
       if (tg) { tg.ready(); tg.expand(); }
-
       const initData = tg?.initData || "";
 
-      function el(tag, attrs={}, children=[]) {
+      const FREQ_LABEL = { '10m': '10 мин', 'hourly': 'Час', 'daily': 'День', 'weekly': 'Неделя', 'monthly': 'Месяц' };
+      const FREQ_HUMAN = { '10m': 'Каждые 10 минут', 'hourly': 'Каждый час', 'daily': 'Ежедневно', 'weekly': 'Еженедельно', 'monthly': 'Ежемесячно' };
+      const CH_LABEL = { telegram: 'Telegram', email: 'Email', both: 'Оба' };
+
+      // ---------- theme: подхватываем реальную тему Telegram, а не жёстко зашитую ----------
+      function applyTheme() {
+        const p = tg?.themeParams || {};
+        const root = document.documentElement.style;
+        const set = (name, value) => { if (value) root.setProperty(name, value); };
+        set('--bg', p.bg_color);
+        set('--section-bg', p.section_bg_color || p.secondary_bg_color);
+        set('--text', p.text_color);
+        set('--hint', p.hint_color || p.subtitle_text_color);
+        set('--accent', p.button_color || p.link_color);
+        set('--accent-text', p.button_text_color);
+        set('--destructive', p.destructive_text_color);
+        try {
+          const bg = getComputedStyle(document.documentElement).getPropertyValue('--bg').trim();
+          tg?.setHeaderColor?.(bg || '#0e1621');
+          tg?.setBackgroundColor?.(bg || '#0e1621');
+        } catch (e) { /* старые клиенты Telegram могут не поддерживать — не критично */ }
+      }
+      applyTheme();
+      tg?.onEvent?.('themeChanged', applyTheme);
+
+      function haptic(kind) {
+        try { tg?.HapticFeedback?.impactOccurred?.(kind || 'light'); } catch (e) {}
+      }
+
+      // ---------- DOM helpers (тот же паттерн, что был в проекте) ----------
+      function el(tag, attrs = {}, children = []) {
         const e = document.createElement(tag);
-        for (const [k,v] of Object.entries(attrs)) {
+        for (const [k, v] of Object.entries(attrs)) {
           if (k === 'class') e.className = v;
           else if (k === 'html') e.innerHTML = v;
+          else if (k.startsWith('on') && typeof v === 'function') e.addEventListener(k.slice(2).toLowerCase(), v);
           else e.setAttribute(k, v);
         }
         for (const c of children) e.appendChild(c);
         return e;
       }
+      const text = (s) => document.createTextNode(s);
 
-      function setError(msg) {
-        document.getElementById('error').textContent = msg || '';
+      function sectionTitle(label) { return el('div', { class: 'section-title', html: label }); }
+      function card(children = [], padClass = '') { return el('div', { class: 'card ' + padClass }, children); }
+      function divider() { return el('div', { class: 'divider' }); }
+
+      function switchEl(onValue, onToggle) {
+        const s = el('div', { class: 'switch ' + (onValue ? 'on' : 'off') }, [el('div', { class: 'knob' })]);
+        s.addEventListener('click', () => { haptic('light'); onToggle(); });
+        return s;
       }
 
-      async function api(path, body=null) {
+      function chipRow(options, activeKey, onSelect, blockStyle) {
+        const wrap = el('div', { class: 'chip-row' });
+        for (const opt of options) {
+          const c = el('button', { class: 'chip' + (opt.key === activeKey ? ' active' : '') + (blockStyle ? ' block' : ''), type: 'button' }, [text(opt.label)]);
+          c.addEventListener('click', () => { haptic('light'); onSelect(opt.key); });
+          wrap.appendChild(c);
+        }
+        return wrap;
+      }
+
+      function iconWrap(pathSvg) { return el('div', { class: 'icon-wrap', html: pathSvg }); }
+
+      const ICON_BELL = '<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 1.5c-2.2 0-3.8 1.7-3.8 4v2.3L2.7 10.4c-.3.4 0 1 .5 1h9.6c.5 0 .8-.6.5-1L11.8 7.8V5.5c0-2.3-1.6-4-3.8-4Z" stroke-width="1.4" stroke-linejoin="round"/><path d="M6.5 13.2a1.6 1.6 0 0 0 3 0" stroke-width="1.4" stroke-linecap="round"/></svg>';
+      const ICON_DOC = '<svg width="15" height="16" viewBox="0 0 15 16" fill="none"><rect x="1.5" y="1" width="12" height="14" rx="1.5" stroke-width="1.4"/><path d="M4.5 5h6M4.5 8h6M4.5 11h3.5" stroke-width="1.3" stroke-linecap="round"/></svg>';
+      const ICON_CHEVRON = '<svg width="7" height="12" viewBox="0 0 7 12" fill="none" style="flex-shrink:0;"><path d="M1 1L6 6L1 11" stroke="var(--hint)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+      const ICON_MINUS = '<svg width="10" height="2" viewBox="0 0 10 2"><rect width="10" height="2" rx="1"/></svg>';
+      const ICON_PLUS = '<svg width="10" height="10" viewBox="0 0 10 10"><rect x="4" width="2" height="10" rx="1"/><rect y="4" width="10" height="2" rx="1"/></svg>';
+
+      function setError(msg) {
+        const box = document.getElementById('errorBox');
+        box.innerHTML = '';
+        if (msg) box.appendChild(el('div', { class: 'error-banner' }, [text(msg)]));
+      }
+
+      async function api(path, body = null) {
         const opt = {
           method: body ? 'POST' : 'GET',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Telegram-Init-Data': initData,
-          },
+          headers: { 'Content-Type': 'application/json', 'X-Telegram-Init-Data': initData },
         };
         if (body) opt.body = JSON.stringify(body);
         const resp = await fetch(path, opt);
         const data = await resp.json().catch(() => ({}));
-        if (!resp.ok || !data.ok) {
-          const err = data.error || (resp.status + ' ' + resp.statusText);
-          throw new Error(err);
-        }
+        if (!resp.ok || !data.ok) throw new Error(data.error || (resp.status + ' ' + resp.statusText));
         return data;
       }
 
-      function fmtMonitors(monitors) {
-        if (!monitors || !monitors.length) return 'Все мониторы';
-        return monitors.map(m => `${m.monitor_name} (${m.monitor_id})`).join(', ');
+      function fmtDate(iso) {
+        if (!iso) return null;
+        try {
+          const d = new Date(iso);
+          return d.toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+        } catch (e) { return null; }
       }
 
-      function showList(subs) {
-        const list = document.getElementById('subs');
-        list.innerHTML = '';
-        const details = document.getElementById('details');
-        details.style.display = 'none';
-        document.getElementById('list').style.display = 'block';
-
-        if (!subs.length) {
-          list.appendChild(el('div', {class:'card', html:`<div class="muted">У вас нет подписок.</div>`}));
-          return;
-        }
-
-        for (const s of subs) {
-          const badge = s.enabled ? '<span class="badge on">включено</span>' : '<span class="badge off">выключено</span>';
-          const card = el('div', {class:'card list-item'});
-          card.innerHTML = `
-            <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
-              <div>
-                <div><b>Подписка #${s.id}</b> ${badge}</div>
-                <div class="muted" style="margin-top:4px;">${fmtMonitors(s.monitors)}</div>
-              </div>
-              <div class="muted mono">${s.frequency}</div>
-            </div>
-            <div class="hr"></div>
-            <div class="muted" style="font-size:12px;">
-              period: ${s.period_from_minutes}..${s.period_to_minutes} мин назад · pdf=${s.send_pdf ? 'on' : 'off'} · xlsx=${s.send_xlsx ? 'on' : 'off'}
-            </div>
-          `;
-          card.addEventListener('click', () => showDetails(s));
-          list.appendChild(card);
+      // ---------- MainButton: нативный у Telegram, фолбэк-кнопка вне Telegram ----------
+      function showMainButton(label, onClick) {
+        const fb = document.getElementById('fallbackMainBtn');
+        if (tg?.MainButton) {
+          fb.style.display = 'none';
+          tg.MainButton.setText(label);
+          tg.MainButton.offClick(tg.MainButton._lastHandler || (() => {}));
+          tg.MainButton._lastHandler = onClick;
+          tg.MainButton.onClick(onClick);
+          tg.MainButton.show();
+        } else {
+          fb.style.display = 'block';
+          fb.textContent = label;
+          fb.onclick = onClick;
         }
       }
-
-      function selectOption(select, value) {
-        for (const o of select.options) if (o.value === value) { o.selected = true; break; }
+      function hideMainButton() {
+        if (tg?.MainButton) tg.MainButton.hide();
+        document.getElementById('fallbackMainBtn').style.display = 'none';
       }
 
-      function showDetails(s) {
-        const list = document.getElementById('list');
-        const details = document.getElementById('details');
-        list.style.display = 'none';
-        details.style.display = 'block';
-        details.innerHTML = '';
+      // ---------- state ----------
+      let monitors = [];
+      let subscriptions = [];
 
-        const backBtn = el('button', {class:'btn'}, [document.createTextNode('← Назад')]);
-        backBtn.onclick = () => { details.style.display='none'; list.style.display='block'; };
+      function renderList() {
+        hideMainButton();
+        tg?.BackButton?.hide?.();
+        document.getElementById('backBtn').style.display = 'none';
+        document.getElementById('title').textContent = 'BTK Reports';
+        const u = tg?.initDataUnsafe?.user;
+        document.getElementById('meta').textContent = u ? `@${u.username || ''} · id ${u.id}` : '';
 
-        const card = el('div', {class:'card'});
-        card.appendChild(el('div', {html: `<b>Подписка #${s.id}</b> <span class="muted">(${fmtMonitors(s.monitors)})</span>`}));
+        const screen = document.getElementById('screen');
+        screen.innerHTML = '';
 
-        const email = el('input', {type:'email', value: s.email || '', placeholder: 'email@domain.com'});
-        const freq = el('select');
-        for (const v of ['10m','hourly','daily','weekly','monthly']) {
-          freq.appendChild(el('option', {value: v, html: v}));
-        }
-        selectOption(freq, s.frequency);
-
-        const pFrom = el('input', {type:'number', min:'0', step:'1', value: String(s.period_from_minutes)});
-        const pTo = el('input', {type:'number', min:'0', step:'1', value: String(s.period_to_minutes)});
-
-        const sendPdf = el('select');
-        sendPdf.appendChild(el('option', {value:'true', html:'Да'}));
-        sendPdf.appendChild(el('option', {value:'false', html:'Нет'}));
-        selectOption(sendPdf, String(!!s.send_pdf));
-
-        const sendXlsx = el('select');
-        sendXlsx.appendChild(el('option', {value:'true', html:'Да'}));
-        sendXlsx.appendChild(el('option', {value:'false', html:'Нет'}));
-        selectOption(sendXlsx, String(!!s.send_xlsx));
-
-        const enabled = el('select');
-        enabled.appendChild(el('option', {value:'true', html:'Включено'}));
-        enabled.appendChild(el('option', {value:'false', html:'Выключено'}));
-        selectOption(enabled, String(!!s.enabled));
-
-        const saveBtn = el('button', {class:'btn primary'}, [document.createTextNode('Сохранить')]);
-        const status = el('div', {class:'muted', style:'margin-top:10px;font-size:12px;'});
-        saveBtn.onclick = async () => {
-          setError('');
-          status.textContent = 'Сохраняю…';
-          try {
-            const data = await api(`/tg/api/subscriptions/${s.id}/update/`, {
-              email: email.value,
-              frequency: freq.value,
-              period_from_minutes: Number(pFrom.value),
-              period_to_minutes: Number(pTo.value),
-              send_pdf: sendPdf.value === 'true',
-              send_xlsx: sendXlsx.value === 'true',
-              enabled: enabled.value === 'true',
+        if (monitors.length) {
+          screen.appendChild(sectionTitle('Мониторы алярмов'));
+          const rows = [];
+          monitors.forEach((m, i) => {
+            const sw = switchEl(m.enabled, async () => {
+              try {
+                const res = await api(`/tg/api/alarm-monitors/${m.monitor_pk}/set-enabled/`, { enabled: !m.enabled });
+                m.enabled = !!res.monitor?.enabled;
+                renderList();
+              } catch (e) { setError(String(e.message || e)); }
             });
-            s = data.subscription;
-            status.textContent = 'Сохранено.';
-          } catch (e) {
-            status.textContent = '';
-            setError(String(e.message || e));
-          }
-        };
-
-        const sendNowTg = el('button', {class:'btn'}, [document.createTextNode('Отправить сейчас в Telegram')]);
-        const sendNowEmail = el('button', {class:'btn'}, [document.createTextNode('Отправить сейчас на Email')]);
-        const sendNowBoth = el('button', {class:'btn'}, [document.createTextNode('Отправить сейчас (Telegram + Email)')]);
-
-        sendNowTg.onclick = () => sendNow(s.id, 'telegram');
-        sendNowEmail.onclick = () => sendNow(s.id, 'email');
-        sendNowBoth.onclick = () => sendNow(s.id, 'both');
-
-        async function sendNow(id, channel) {
-          setError('');
-          status.textContent = 'Ставлю в очередь…';
-          try {
-            const data = await api(`/tg/api/subscriptions/${id}/send-now/`, {channel});
-            status.textContent = `Поставлено в очередь: ${data.task_ids.join(', ')}`;
-          } catch (e) {
-            status.textContent = '';
-            setError(String(e.message || e));
-          }
+            rows.push(el('div', { class: 'row' }, [
+              iconWrap(ICON_BELL),
+              el('div', { style: 'flex:1; min-width:0;' }, [
+                el('div', { style: 'font-size:15px;' }, [text(m.monitor_name)]),
+                el('div', { class: 'muted', style: 'font-size:12.5px; margin-top:1px;' }, [text('ID ' + m.monitor_id)]),
+              ]),
+              sw,
+            ]));
+            if (i < monitors.length - 1) rows.push(divider());
+          });
+          screen.appendChild(card(rows));
         }
 
-        const start = el('input', {type:'datetime-local'});
-        const end = el('input', {type:'datetime-local'});
-        // default: последние 24 часа
-        const now = new Date();
-        const dayAgo = new Date(now.getTime() - 24*60*60*1000);
-        start.value = dayAgo.toISOString().slice(0,16);
-        end.value = now.toISOString().slice(0,16);
-
-        const sendRangeTg = el('button', {class:'btn'}, [document.createTextNode('Диапазон → Telegram')]);
-        const sendRangeEmail = el('button', {class:'btn'}, [document.createTextNode('Диапазон → Email')]);
-        const sendRangeBoth = el('button', {class:'btn'}, [document.createTextNode('Диапазон → Telegram + Email')]);
-
-        sendRangeTg.onclick = () => sendRange(s.id, 'telegram');
-        sendRangeEmail.onclick = () => sendRange(s.id, 'email');
-        sendRangeBoth.onclick = () => sendRange(s.id, 'both');
-
-        async function sendRange(id, channel) {
-          setError('');
-          status.textContent = 'Ставлю диапазон в очередь…';
-          try {
-            const data = await api(`/tg/api/subscriptions/${id}/send-range/`, {
-              channel,
-              start: start.value,
-              end: end.value,
-            });
-            status.textContent = `Поставлено в очередь: ${data.task_ids.join(', ')}`;
-          } catch (e) {
-            status.textContent = '';
-            setError(String(e.message || e));
-          }
+        screen.appendChild(sectionTitle('Подписки на отчёты'));
+        if (!subscriptions.length) {
+          screen.appendChild(card([el('div', { class: 'empty' }, [text('У вас нет подписок на отчёты.')])]));
+        } else {
+          const rows = [];
+          subscriptions.forEach((s, i) => {
+            const monitorsLabel = s.monitors.length ? s.monitors.map(m => m.monitor_name || ('ID ' + m.monitor_id)).join(', ') : 'Все мониторы';
+            const row = el('div', { class: 'row tap' }, [
+              iconWrap(ICON_DOC),
+              el('div', { style: 'flex:1; min-width:0;' }, [
+                el('div', { style: 'display:flex; align-items:center; gap:6px;' }, [
+                  el('span', { style: `width:7px;height:7px;border-radius:50%;background:${s.enabled ? 'var(--success)' : 'var(--hint)'};flex-shrink:0;` }),
+                  el('span', { style: 'font-size:15px; font-weight:600;' }, [text('Подписка #' + s.id)]),
+                ]),
+                el('div', { class: 'muted', style: 'font-size:12.5px; margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;' }, [
+                  text(`${FREQ_HUMAN[s.frequency] || s.frequency} · ${monitorsLabel}`),
+                ]),
+              ]),
+              el('div', { html: ICON_CHEVRON }),
+            ]);
+            row.addEventListener('click', () => renderDetails(s.id));
+            rows.push(row);
+            if (i < subscriptions.length - 1) rows.push(divider());
+          });
+          screen.appendChild(card(rows));
         }
 
-        card.appendChild(el('label', {html:'Email получателя'}));
-        card.appendChild(email);
+        if (monitors.length) {
+          screen.appendChild(el('div', { class: 'footer-hint' }, [
+            text('Список мониторов назначает администратор — здесь можно только включать и выключать уведомления по ним.'),
+          ]));
+        }
+      }
 
-        card.appendChild(el('label', {html:'Частота (frequency)'}));
-        card.appendChild(freq);
+      function renderDetails(subId) {
+        const s = subscriptions.find(x => x.id === subId);
+        if (!s) return renderList();
 
-        const grid = el('div', {class:'grid'});
-        const c1 = el('div'); c1.appendChild(el('label', {html:'Период ОТ (минут назад)'})); c1.appendChild(pFrom);
-        const c2 = el('div'); c2.appendChild(el('label', {html:'Период ДО (минут назад)'})); c2.appendChild(pTo);
-        grid.appendChild(c1); grid.appendChild(c2);
-        card.appendChild(grid);
+        document.getElementById('backBtn').style.display = 'flex';
+        document.getElementById('backBtn').onclick = renderList;
+        tg?.BackButton?.show?.();
+        tg?.BackButton?.offClick?.(tg.BackButton._lastHandler || (() => {}));
+        tg.BackButton && (tg.BackButton._lastHandler = renderList);
+        tg?.BackButton?.onClick?.(renderList);
 
-        const grid2 = el('div', {class:'grid'});
-        const c3 = el('div'); c3.appendChild(el('label', {html:'Отправлять PDF'})); c3.appendChild(sendPdf);
-        const c4 = el('div'); c4.appendChild(el('label', {html:'Отправлять XLSX'})); c4.appendChild(sendXlsx);
-        grid2.appendChild(c3); grid2.appendChild(c4);
-        card.appendChild(grid2);
+        document.getElementById('title').textContent = 'Подписка #' + s.id;
+        const metaBits = [];
+        const last = fmtDate(s.last_sent_at);
+        const next = fmtDate(s.next_run_at);
+        if (last) metaBits.push('Отправлено: ' + last);
+        if (next && s.enabled) metaBits.push('Следующая: ' + next);
+        document.getElementById('meta').textContent = metaBits.join(' · ') || 'Ещё не отправлялось';
 
-        card.appendChild(el('label', {html:'Статус подписки'}));
-        card.appendChild(enabled);
+        setError('');
+        const screen = document.getElementById('screen');
+        screen.innerHTML = '';
 
-        card.appendChild(el('div', {style:'margin-top:12px;'} , [saveBtn]));
-        card.appendChild(status);
+        let rangeOpen = false;
 
-        const actions = el('div', {class:'card'});
-        actions.appendChild(el('div', {html:'<b>Запуск отчёта</b>'}));
-        actions.appendChild(el('div', {class:'row', style:'margin-top:10px;'}, [sendNowTg, sendNowEmail, sendNowBoth]));
-        actions.appendChild(el('div', {class:'hr'}));
-        actions.appendChild(el('div', {class:'muted', html:'Диапазон (локальное время):'}));
-        const grid3 = el('div', {class:'grid', style:'margin-top:8px;'});
-        const c5 = el('div'); c5.appendChild(el('label', {html:'Начало'})); c5.appendChild(start);
-        const c6 = el('div'); c6.appendChild(el('label', {html:'Конец'})); c6.appendChild(end);
-        grid3.appendChild(c5); grid3.appendChild(c6);
-        actions.appendChild(grid3);
-        actions.appendChild(el('div', {class:'row', style:'margin-top:10px;'}, [sendRangeTg, sendRangeEmail, sendRangeBoth]));
+        function statusToast(msg) {
+          const old = screen.querySelector('.toast');
+          if (old) old.remove();
+          screen.appendChild(el('div', { class: 'toast' }, [text(msg)]));
+        }
 
-        details.appendChild(backBtn);
-        details.appendChild(card);
-        details.appendChild(actions);
+        // Статус
+        screen.appendChild(card([
+          el('div', { class: 'row' }, [
+            el('div', { style: 'flex:1; font-size:15px;' }, [text('Подписка активна')]),
+            switchEl(s.enabled, () => { s.enabled = !s.enabled; renderDetails(subId); }),
+          ]),
+        ], 'top16'));
+
+        // Получатель
+        screen.appendChild(sectionTitle('Получатель'));
+        const emailInput = el('input', { type: 'email', placeholder: 'email@domain.com', value: s.email || '' });
+        emailInput.addEventListener('change', () => { s.email = emailInput.value; });
+        screen.appendChild(card([
+          el('div', { class: 'row' }, [
+            el('div', { style: 'font-size:15px; flex-shrink:0;' }, [text('Email')]),
+            emailInput,
+          ]),
+        ]));
+
+        // Расписание
+        screen.appendChild(sectionTitle('Расписание'));
+        const freqBox = el('div', {});
+        function renderFreq() {
+          freqBox.innerHTML = '';
+          freqBox.appendChild(chipRow(
+            Object.keys(FREQ_LABEL).map(k => ({ key: k, label: FREQ_LABEL[k] })),
+            s.frequency,
+            (key) => { s.frequency = key; renderFreq(); },
+          ));
+        }
+        renderFreq();
+
+        const periodBox = el('div', {});
+        function renderPeriod() {
+          periodBox.innerHTML = '';
+          periodBox.appendChild(el('div', { class: 'muted', style: 'font-size:12.5px; margin-bottom:8px;' }, [
+            text(`Окно отчёта: от ${s.period_from_minutes} до ${s.period_to_minutes} мин назад`),
+          ]));
+          const mkStepper = (label, get, set, minus, plus) => el('div', { class: 'stepper' }, [
+            el('div', { style: 'font-size:14px;' }, [text(label)]),
+            el('div', { style: 'display:flex; align-items:center; gap:10px;' }, [
+              el('button', { class: 'stepper-btn', type: 'button', html: ICON_MINUS, onClick: () => { minus(); renderPeriod(); } }),
+              el('div', { class: 'stepper-val' }, [text(get() + ' мин')]),
+              el('button', { class: 'stepper-btn', type: 'button', html: ICON_PLUS, onClick: () => { plus(); renderPeriod(); } }),
+            ]),
+          ]);
+          periodBox.appendChild(mkStepper('Начало окна',
+            () => s.period_from_minutes,
+            null,
+            () => { s.period_from_minutes = Math.max(s.period_to_minutes + 15, s.period_from_minutes - 15); },
+            () => { s.period_from_minutes += 15; }));
+          periodBox.appendChild(mkStepper('Конец окна',
+            () => s.period_to_minutes,
+            null,
+            () => { s.period_to_minutes = Math.max(0, s.period_to_minutes - 15); },
+            () => { s.period_to_minutes = Math.min(s.period_from_minutes - 15, s.period_to_minutes + 15); }));
+        }
+        renderPeriod();
+
+        screen.appendChild(card([
+          freqBox,
+          el('div', { style: 'height:1px; background:var(--separator); margin:14px 0 12px;' }),
+          periodBox,
+        ], 'pad'));
+
+        // Формат файлов
+        screen.appendChild(sectionTitle('Формат файлов'));
+        const pdfSw = switchEl(s.send_pdf, () => { s.send_pdf = !s.send_pdf; renderDetails(subId); });
+        const xlsxSw = switchEl(s.send_xlsx, () => { s.send_xlsx = !s.send_xlsx; renderDetails(subId); });
+        screen.appendChild(card([
+          el('div', { class: 'row' }, [el('div', { style: 'flex:1; font-size:15px;' }, [text('PDF')]), pdfSw]),
+          divider(),
+          el('div', { class: 'row' }, [el('div', { style: 'flex:1; font-size:15px;' }, [text('XLSX')]), xlsxSw]),
+        ]));
+
+        // Отправить
+        screen.appendChild(sectionTitle('Отправить'));
+        let channel = 'telegram';
+        const channelBox = el('div', {});
+        function renderChannel() {
+          channelBox.innerHTML = '';
+          channelBox.appendChild(chipRow(
+            Object.keys(CH_LABEL).map(k => ({ key: k, label: CH_LABEL[k] })),
+            channel,
+            (key) => { channel = key; renderChannel(); },
+            true,
+          ));
+        }
+        renderChannel();
+        screen.appendChild(card([channelBox], 'pad'));
+
+        const rangeSlot = el('div', {});
+        const sendNowRow = el('div', { class: 'row tap' }, [el('div', { style: 'flex:1; color:var(--accent); font-size:15px;' }, [text('Отправить сейчас')])]);
+        sendNowRow.addEventListener('click', async () => {
+          try {
+            const data = await api(`/tg/api/subscriptions/${s.id}/send-now/`, { channel });
+            statusToast('Поставлено в очередь: ' + data.task_ids.join(', '));
+            haptic('medium');
+          } catch (e) { setError(String(e.message || e)); }
+        });
+
+        const rangeRow = el('div', { class: 'row tap' }, [el('div', { style: 'flex:1; color:var(--accent); font-size:15px;' }, [text('За произвольный период…')])]);
+        rangeRow.addEventListener('click', () => { rangeOpen = !rangeOpen; renderRangeSlot(); });
+
+        function renderRangeSlot() {
+          rangeSlot.innerHTML = '';
+          if (!rangeOpen) return;
+          const now = new Date();
+          const dayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+          const toLocalInput = (d) => new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+          const start = el('input', { type: 'datetime-local', value: toLocalInput(dayAgo) });
+          const end = el('input', { type: 'datetime-local', value: toLocalInput(now) });
+          const sendBtn = el('div', { class: 'row tap' }, [el('div', { style: 'flex:1; color:var(--accent); font-size:15px; text-align:center;' }, [text('Отправить диапазон')])]);
+          sendBtn.addEventListener('click', async () => {
+            try {
+              const data = await api(`/tg/api/subscriptions/${s.id}/send-range/`, { channel, start: start.value, end: end.value });
+              statusToast('Диапазон поставлен в очередь: ' + data.task_ids.join(', '));
+              haptic('medium');
+            } catch (e) { setError(String(e.message || e)); }
+          });
+          rangeSlot.appendChild(card([
+            el('div', { class: 'row' }, [el('div', { style: 'font-size:14px;' }, [text('Начало')]), start]),
+            divider(),
+            el('div', { class: 'row' }, [el('div', { style: 'font-size:14px;' }, [text('Конец')]), end]),
+          ], 'top12'));
+          rangeSlot.appendChild(card([sendBtn]));
+        }
+        renderRangeSlot();
+
+        screen.appendChild(card([sendNowRow, divider(), rangeRow]));
+        screen.appendChild(rangeSlot);
+
+        function save(extra, showToast) {
+          const payload = Object.assign({
+            email: s.email,
+            frequency: s.frequency,
+            period_from_minutes: s.period_from_minutes,
+            period_to_minutes: s.period_to_minutes,
+            send_pdf: s.send_pdf,
+            send_xlsx: s.send_xlsx,
+            enabled: s.enabled,
+          }, extra || {});
+          return api(`/tg/api/subscriptions/${s.id}/update/`, payload).then((data) => {
+            Object.assign(s, data.subscription);
+            if (showToast !== false) statusToast('Сохранено');
+            haptic('medium');
+          }).catch((e) => setError(String(e.message || e)));
+        }
+
+        showMainButton('Сохранить', () => save({}, true));
       }
 
       async function boot() {
         try {
           if (!initData) throw new Error('Telegram initData отсутствует (открывайте страницу внутри Telegram).');
-          const [data, alarms] = await Promise.all([
+          const [subsData, monData] = await Promise.all([
             api('/tg/api/subscriptions/'),
             api('/tg/api/alarm-monitors/'),
           ]);
-          const u = tg?.initDataUnsafe?.user;
-          document.getElementById('me').textContent = u ? `@${u.username || ''} id=${u.id}` : '';
-
-          // Alarm monitors block
-          const alarmRoot = document.getElementById('alarmMonitors');
-          alarmRoot.innerHTML = '';
-          const monitors = alarms.monitors || [];
-          if (monitors.length) {
-            const card = el('div', {class:'card'});
-            card.appendChild(el('div', {html:'<b>Оповещения по Alarm</b><div class="muted" style="margin-top:4px;font-size:12px;">Админ назначает список мониторов, вы можете только включать/выключать.</div>'}));
-            card.appendChild(el('div', {class:'hr'}));
-
-            for (const m of monitors) {
-              const row = el('div', {style:'display:flex;justify-content:space-between;align-items:center;gap:10px;padding:8px 0;'});
-              const left = el('div', {html:`<div>${m.monitor_name} <span class="muted">(${m.monitor_id})</span></div>`});
-              const btn = el('button', {class: 'btn ' + (m.enabled ? 'danger' : 'primary')}, [document.createTextNode(m.enabled ? 'Выключить' : 'Включить')]);
-              btn.onclick = async () => {
-                setError('');
-                btn.disabled = true;
-                try {
-                  const res = await api(`/tg/api/alarm-monitors/${m.monitor_pk}/set-enabled/`, {enabled: !m.enabled});
-                  m.enabled = !!res.monitor?.enabled;
-                  btn.className = 'btn ' + (m.enabled ? 'danger' : 'primary');
-                  btn.textContent = m.enabled ? 'Выключить' : 'Включить';
-                } catch (e) {
-                  setError(String(e.message || e));
-                } finally {
-                  btn.disabled = false;
-                }
-              };
-              row.appendChild(left);
-              row.appendChild(btn);
-              card.appendChild(row);
-            }
-            alarmRoot.appendChild(card);
-          }
-
-          showList(data.subscriptions || []);
+          subscriptions = subsData.subscriptions || [];
+          monitors = monData.monitors || [];
+          renderList();
         } catch (e) {
+          document.getElementById('screen').innerHTML = '';
           setError(String(e.message || e));
         }
       }
