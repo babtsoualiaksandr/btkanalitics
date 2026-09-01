@@ -282,6 +282,30 @@ def generate_xlsx(*, rows: List[Dict[str, Any]]) -> Optional[bytes]:
     return bio.getvalue()
 
 
+def _shrink_image_bytes_for_pdf(data: bytes, *, max_dim: int = 400, quality: int = 70) -> bytes:
+    """Уменьшить/пережать снимок перед вставкой в PDF.
+
+    В PDF картинка рисуется мелкой (35x25мм), но reportlab.Image вставляет
+    исходные байты как есть — при original_quality-снимках с камер (сотни КБ
+    каждый) 50 картинок легко раздувают письмо за лимит вложений почты
+    (Gmail отклоняет с 552). Пережимаем в JPEG нужного размера; при любой
+    ошибке возвращаем исходные байты, чтобы не терять картинку.
+    """
+    try:
+        from PIL import Image as PILImage
+    except Exception:
+        return data
+    try:
+        img = PILImage.open(io.BytesIO(data))
+        img = img.convert("RGB")
+        img.thumbnail((max_dim, max_dim))
+        out = io.BytesIO()
+        img.save(out, format="JPEG", quality=quality, optimize=True)
+        return out.getvalue()
+    except Exception:
+        return data
+
+
 def generate_pdf(*, rows: List[Dict[str, Any]], title: str) -> Optional[bytes]:
     """Сгенерировать простой PDF. Возвращает bytes или None, если генератор недоступен."""
     try:
@@ -381,7 +405,8 @@ def generate_pdf(*, rows: List[Dict[str, Any]], title: str) -> Optional[bytes]:
         snap_bytes = r.get("snapshot_bytes")
         if snap_bytes:
             try:
-                img_cell = Image(io.BytesIO(snap_bytes))
+                small_bytes = _shrink_image_bytes_for_pdf(snap_bytes)
+                img_cell = Image(io.BytesIO(small_bytes))
                 img_cell.drawHeight = 25 * mm
                 img_cell.drawWidth = 35 * mm
             except Exception:
