@@ -158,8 +158,8 @@ class AccountVideoAnalytics(models.Model):
         default=0,
         help_text=(
             "Счётчик последовательных падений подряд (эпизод флаппинга). "
-            "Сбрасывается, если между падениями прошло больше "
-            "PARSER_BACKOFF_EPISODE_WINDOW_MIN минут — см. auto_restart_error_parsers."
+            "Сбрасывается в 0, когда парсер отработал без сбоев "
+            "PARSER_SUSTAINED_SUCCESS_MIN минут подряд — см. check_parser_heartbeats."
         ),
     )
 

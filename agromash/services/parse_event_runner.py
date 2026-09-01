@@ -121,18 +121,23 @@ def _mark_stopped(account_id: int) -> None:
     logger.info("va_parser mark_stopped account_id=%s at=%s", account_id, now.isoformat())
 
 
-def _next_backoff_attempt(account: AccountVideoAnalytics, *, now) -> int:
+def _next_backoff_attempt(account: AccountVideoAnalytics) -> int:
     """Номер попытки для backoff-лесенки (см. PARSER_RESTART_BACKOFF_SCHEDULE_SEC).
 
-    Если с прошлого падения этого аккаунта прошло больше
-    PARSER_BACKOFF_EPISODE_WINDOW_MIN минут — предыдущий эпизод флаппинга
-    считается закончившимся, счётчик стартует заново с 1 (быстрая ступень).
-    Иначе — эскалируем (+1 к прошлому значению).
+    Эпизод флаппинга закрывается не по времени, а по факту устойчивой работы:
+    check_parser_heartbeats сбрасывает parser_restart_attempt в 0, когда
+    парсер отработал без сбоев PARSER_SUSTAINED_SUCCESS_MIN минут. Поэтому
+    здесь достаточно эскалировать, если счётчик ещё не сброшен (> 0) —
+    прошлый эпизод ещё не закрыт.
+
+    Раньше решение принималось по (now - account.parser_stopped_at) < N минут,
+    но parser_stopped_at обнуляется в _mark_started() при каждом рестарте —
+    значит на этот момент падения "недавно" никогда не было, эскалация не
+    срабатывала, и все повторные падения шли по самой быстрой (30с) ступени
+    лесенки, независимо от того, сколько раз подряд аккаунт уже падал.
     """
-    window_min = int(getattr(settings, "PARSER_BACKOFF_EPISODE_WINDOW_MIN", 5))
-    prev_stopped_at = account.parser_stopped_at
-    if prev_stopped_at and (now - prev_stopped_at) <= timezone.timedelta(minutes=window_min):
-        return int(account.parser_restart_attempt or 0) + 1
+    if account and (account.parser_restart_attempt or 0) > 0:
+        return int(account.parser_restart_attempt) + 1
     return 1
 
 
@@ -153,9 +158,9 @@ def _mark_error(
         next_attempt = 1
     else:
         account = AccountVideoAnalytics.objects.filter(pk=account_id).only(
-            "parser_stopped_at", "parser_restart_attempt"
+            "parser_restart_attempt"
         ).first()
-        next_attempt = _next_backoff_attempt(account, now=now) if account else 1
+        next_attempt = _next_backoff_attempt(account)
 
     update_fields = {
         "parser_status": AccountVideoAnalytics.PARSER_STATUS_ERROR,
